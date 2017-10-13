@@ -101,6 +101,7 @@ fn update_hashtable(
 /// assert_eq!(&dec, &vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 /// # Ok(())
 /// # })().unwrap()
+/// ```
 ///
 /// # Errors
 /// If an error is returned, some bytes were already read from `r`, but some
@@ -111,7 +112,6 @@ fn update_hashtable(
 /// if data would be larger.
 ///
 /// If the incoming data are compressed using level 2, an error is returned.
-/// ```
 pub fn decompress(r: &mut Read, max_size: usize) -> Result<Vec<u8>> {
     let mut res = Vec::new();
     let mut control: u32 = 1;
