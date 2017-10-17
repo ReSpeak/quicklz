@@ -10,9 +10,9 @@ extern crate error_chain;
 
 use std::cell::RefCell;
 use std::cmp;
-use std::io::Read;
+use std::io::{Read, Write};
 
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 #[allow(unused_doc_comment)]
 pub mod errors {
@@ -298,6 +298,154 @@ pub fn decompress(r: &mut Read, max_size: usize) -> Result<Vec<u8>> {
     Ok(res)
 }
 
+/// Checks if all elements in the slice have the same value.
+fn is_eq<T: PartialEq>(arr: &[T]) -> bool {
+    for i in 1..arr.len() {
+        if arr[0] != arr[i] {
+            return false;
+        }
+    }
+    true
+}
+
+/// Writes the qlz header at the start of the dest vec.
+fn write_header
+    (dest: &mut Vec<u8>, srclen: usize, level: u8, headerlen: u8, compressed: bool) -> Result<()> {
+    let flags: u8 = if compressed {
+        0x01 | (level << 2) | 0x40 // (not compressed) | level | always
+    } else {
+               (level << 2) | 0x40 //       compressed | level | always
+    };
+
+    if headerlen == 3 {
+        // short header
+        dest[0] = flags;
+        dest[1] = dest.len() as u8;
+        dest[2] = srclen as u8;
+    } else if headerlen == 9 {
+        // long header
+        let mut vec = vec![];
+        vec.write_u8(flags | 0x02)?;
+        vec.write_u32::<LittleEndian>(dest.len() as u32)?;
+        vec.write_u32::<LittleEndian>(srclen as u32)?;
+        dest[0..9].as_mut().write(&vec)?;
+    } else { 
+        unreachable!();
+    };
+    Ok(())
+}
+
+/// Writes an u32 control sequence.
+fn write_control(dest: &mut Vec<u8>, ctrl_pos: usize, ctrl: u32) -> Result<()> {
+    let mut vec = Vec::with_capacity(4);
+    vec.write_u32::<LittleEndian>(ctrl)?;
+    dest[ctrl_pos..ctrl_pos+4].as_mut().write(&vec)?;
+    Ok(())
+}
+
+/// Compress data read from `data`.
+pub fn compress(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
+    if level != 1 && level != 3 {
+        bail!("This QuickLZ implementation supports only level 1 and 3 compress");
+    }
+    if data.len() as u64 >= (u32::max_value() - 400) as u64 {
+        bail!(format!("QuickLZ can only compress up to {}", u32::max_value() - 400));
+    }
+
+    let headerlen : u8 = if data.len() < 1 { 3 } else { 9 };
+    let mut dest = vec![0; headerlen as usize + 4];
+    
+    if level == 1 {
+        let mut control: u32 = 1 << 31;
+        let mut control_pos: usize = headerlen as usize;
+        //let mut dest_pos = headerlen as usize + 4;
+        let mut lits: u32 = 0;
+
+        let mut hashtable = vec![0 as u32; 4096];
+        let mut hash_counter = vec![false; 4096];
+        let mut cachetable = vec![0 as u32; 4096];
+
+        let mut source_pos = 0;
+        while source_pos + 10 < data.len() {
+            if control & 1 != 0 {
+                if source_pos > 3 * (data.len() / 4) && dest.len() > source_pos - (source_pos / 32) {
+                    dest.write(&data)?;
+                    write_header(&mut dest, data.len(), level, headerlen, false)?;
+                    return Ok(data);
+                }
+                write_control(&mut dest, control_pos, (control >> 1) | (1 << 31))?;
+                control_pos = dest.len();
+                dest.write_u32::<LittleEndian>(0)?;
+                control = 1 << 31;
+            }
+
+            let next = (data[source_pos] as usize) 
+                | ((data[source_pos + 1] as usize) << 8)
+                | ((data[source_pos + 2] as usize) << 16);
+            let hash = ((next >> 12) ^ next) & 0xfff;
+            let offset = hashtable[hash];
+            let cache = cachetable[hash];
+            let counter = hash_counter[hash];
+            let next = next as u32;
+            cachetable[hash] = next;
+            hashtable[hash] = source_pos as u32;
+            
+            if cache == next
+                && counter
+                && (source_pos as u32 - offset >= 3
+                    || source_pos == (offset + 1) as usize
+                    && lits >= 3
+                    && source_pos > 3
+                    && is_eq(&data[source_pos - 3 .. source_pos + 3])) {
+                control = (control >> 1) | (1 << 31);
+                let mut matchlen = 3;
+                let remainder = cmp::min(data.len() - 4 - source_pos, 0xff);
+                while data[offset as usize + matchlen] == data[source_pos + matchlen]
+                    && matchlen < remainder {
+                    matchlen += 1;
+                }
+                if matchlen < 18 {
+                    dest.write_u16::<LittleEndian>((hash << 4 | (matchlen - 2)) as u16)?;
+                } else {
+                    // TODO
+                    dest.write_u24::<LittleEndian>((hash << 4 | (matchlen << 16)) as u32)?;
+                }
+                source_pos += matchlen;
+                lits = 0;
+            } else {
+                lits += 1;
+                hash_counter[hash] = true;
+
+                dest.write_u8(data[source_pos])?; // TODO move source_pos++ ?
+                source_pos += 1; // ?
+                control >>= 1;
+            }
+        }
+
+        while source_pos < data.len() {
+            if control & 1 != 0 {
+                write_control(&mut dest, control_pos, (control >> 1) | (1 << 31))?;
+                control_pos = dest.len();
+                dest.write_u32::<LittleEndian>(0)?;
+                control = 1 << 31;
+            }
+            dest.write_u8(data[source_pos])?; // TODO move source_pos++ ?
+            source_pos += 1; // ?
+            control >>= 1;
+        }
+
+        while control & 1 == 0 {
+            control >>= 1;
+        }
+        write_control(&mut dest, control_pos, (control >> 1) | (1 << 31))?;
+
+        // TODO write header
+    }
+
+    write_header(&mut dest, data.len(), level, headerlen, true)?;
+    Ok(dest)
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
@@ -361,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn string() {
+    fn string_decompress() {
         let data = [
             0x47, 0x4c, 0x2, 0, 0, 0xf9, 0x3, 0, 0, 0, 0, 0x4, 0x84, 0x69,
             0x6e, 0x69, 0x74, 0x73, 0x65, 0x72, 0x76, 0x65, 0x72, 0x20, 0x76,
@@ -422,6 +570,70 @@ mod tests {
         let mut r = Cursor::new(data.as_ref());
         let dec = ::decompress(&mut r, 1024).unwrap();
         assert_eq!(orig.as_ref(), dec.as_slice());
+    }
+
+    #[test]
+    fn string_compress() {
+        let data = [
+            0x47, 0x4c, 0x2, 0, 0, 0xf9, 0x3, 0, 0, 0, 0, 0x4, 0x84, 0x69,
+            0x6e, 0x69, 0x74, 0x73, 0x65, 0x72, 0x76, 0x65, 0x72, 0x20, 0x76,
+            0x69, 0x72, 0x74, 0x75, 0x61, 0x6c, 0x54, 0x25, 0x5f, 0x6e, 0x61,
+            0x6d, 0x65, 0x3d, 0x53, 0x23, 0x50, 0x5c, 0x73, 0x64, 0x65, 0,
+            0x20, 0, 0x80, 0x72, 0x5c, 0x73, 0x56, 0x65, 0x72, 0x70, 0x6c,
+            0x61, 0x6e, 0x74, 0x65, 0x6e, 0x7d, 0xb, 0x77, 0x65, 0x6c, 0x63,
+            0x6f, 0x6d, 0x65, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x3d,
+            0x54, 0x68, 0x50, 0x82, 0x1, 0xb0, 0x69, 0x73, 0x5c, 0x73, 0xe2,
+            0x6a, 0x53, 0x61, 0xa6, 0x6d, 0x79, 0x61, 0xb4, 0x57, 0x6f, 0x72,
+            0x6c, 0x64, 0x7d, 0xb, 0x61, 0xa6, 0x74, 0x66, 0x6f, 0x72, 0x6d,
+            0x3d, 0x4c, 0x69, 0x6e, 0x75, 0x78, 0x7d, 0xb, 0x1, 0x25, 0x73, 0,
+            0, 0, 0x80, 0x69, 0x6f, 0x6e, 0x3d, 0x33, 0x2e, 0x30, 0x2e, 0x31,
+            0x33, 0x2e, 0x38, 0x5c, 0x73, 0x5b, 0x42, 0x75, 0x69, 0x6c, 0x64,
+            0x3a, 0x5c, 0x73, 0x31, 0x35, 0x30, 0x30, 0x34, 0x35, 0x32, 0x38,
+            0x8, 0, 0x2, 0x88, 0x31, 0x31, 0x5d, 0x7d, 0xb, 0x6d, 0x61, 0x78,
+            0x63, 0x6c, 0x69, 0x65, 0x6e, 0x74, 0x73, 0x3d, 0x33, 0x32, 0x7d,
+            0xb, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x64, 0x3d, 0x30, 0x7e,
+            0xb, 0x6f, 0x64, 0x65, 0, 0x92, 0x10, 0x9c, 0x63, 0x5f, 0x65, 0x6e,
+            0x63, 0x72, 0x79, 0x70, 0x74, 0xf1, 0x98, 0x5f, 0x6d, 0x91, 0x23,
+            0x3d, 0x31, 0x7d, 0xb, 0x68, 0x6f, 0x73, 0x74, 0xb6, 0x25, 0x4c,
+            0xc3, 0xa9, 0x5c, 0x73, 0x58, 0x27, 0xb1, 0x66, 0x61, 0xa6, 0x6d,
+            0x79, 0x7, 0x8, 0x18, 0xe0, 0x70, 0xb, 0x1a, 0x94, 0xba, 0x2e,
+            0x75, 0x64, 0x65, 0x66, 0x61, 0x75, 0x6c, 0x74, 0x5f, 0x55, 0x25,
+            0x67, 0x72, 0x6f, 0x75, 0x70, 0x3d, 0x38, 0x7d, 0xb, 0x26, 0x30,
+            0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x5f, 0, 0x49, 0x16,
+            0xe2, 0x85, 0x82, 0x11, 0x81, 0x80, 0x62, 0x72, 0x88, 0x72, 0x5f,
+            0x75, 0x72, 0x6c, 0x7d, 0xb, 0xe9, 0x85, 0x67, 0x66, 0x78, 0x80,
+            0x27, 0x22, 0x69, 0x6e, 0x74, 0x21, 0x50, 0x61, 0x6c, 0x3d, 0x32,
+            0x30, 0x30, 0x2e, 0x75, 0x70, 0x72, 0x69, 0x6f, 0x72, 0x69, 0x74,
+            0, 0x40, 0, 0xb0, 0x79, 0x5f, 0x73, 0x70, 0x65, 0x61, 0x6b, 0x65,
+            0x72, 0x5f, 0x64, 0x69, 0x6d, 0x6d, 0x92, 0xba, 0x69, 0x66, 0x69,
+            0x63, 0x61, 0x74, 0x6f, 0x72, 0x3d, 0x2d, 0x31, 0x38, 0x2e, 0x31,
+            0x33, 0x2e, 0x75, 0x69, 0x2, 0, 0x3f, 0x80, 0x64, 0xe0, 0x33, 0x15,
+            0x62, 0x75, 0x74, 0x74, 0x6f, 0x6e, 0x5f, 0x74, 0x6f, 0x6f, 0x6c,
+            0x74, 0x69, 0x70, 0x70, 0xb, 0x14, 0x24, 0x33, 0x20, 0x4b, 0x17,
+            0x24, 0x33, 0x10, 0x1e, 0x16, 0x82, 0x7b, 0x5f, 0x70, 0x68, 0x6f,
+            0x6e, 0x65, 0x74, 0x69, 0x63, 0x90, 0x1, 0x88, 0xc1, 0x3d, 0x6d,
+            0x6f, 0x62, 0x7d, 0xb, 0x69, 0x63, 0x91, 0xb9, 0xf1, 0x7b, 0x32,
+            0x35, 0x36, 0x38, 0x35, 0x35, 0x35, 0x32, 0x31, 0x33, 0x7e, 0xb,
+            0x70, 0x3d, 0x30, 0xd1, 0x2c, 0x21, 0xd3, 0x2c, 0x5c, 0x73, 0x3a,
+            0x3a, 0x7d, 0xb, 0x50, 0, 0x1f, 0x80, 0x61, 0x73, 0x6b, 0x5f, 0x1,
+            0x84, 0x5f, 0x71, 0x4e, 0x76, 0x69, 0x6c, 0x65, 0x67, 0x65, 0x6b,
+            0x65, 0x79, 0xef, 0x23, 0xe9, 0x85, 0xb3, 0x92, 0x2e, 0x75, 0x56,
+            0xe7, 0x74, 0x65, 0x6d, 0x70, 0x5f, 0x64, 0x65, 0x6c, 0x65, 0x74,
+            0x32, 0, 0x28, 0x80, 0x65, 0x92, 0x20, 0x61, 0x79, 0x91, 0x20, 0x3,
+            0x63, 0x3d, 0x31, 0x30, 0x20, 0x61, 0x63, 0x6e, 0x3d, 0x49, 0x74,
+            0x73, 0x4d, 0x65, 0x61, 0x71, 0x6c, 0xf1, 0x7b, 0x31, 0x20, 0x70,
+            0x76, 0x3d, 0x36, 0x20, 0x6c, 0x74, 0x8, 0xc0, 0x40, 0x80, 0x3d,
+            0x30, 0x20, 0x54, 0xaf, 0x5f, 0x74, 0x61, 0x6c, 0x6b, 0x5f, 0x70,
+            0x6f, 0x77, 0x65, 0x12, 0xfa, 0x66, 0x5e, 0x6e, 0x65, 0x65, 0x64,
+            0x65, 0x64, 0x85, 0x50, 0x71, 0x75, 0x65, 0x72, 0x79, 0x5f, 0x76,
+            0x69, 0, 0, 0, 0x80, 0x65, 0x77, 0x5f, 0x70, 0x6f, 0x77, 0x65,
+            0x72, 0x3d, 0x37, 0x35,
+        ];
+        let orig = b"initserver virtualserver_name=Server\\sder\\sVerplanten virtualserver_welcomemessage=This\\sis\\sSplamys\\sWorld virtualserver_platform=Linux virtualserver_version=3.0.13.8\\s[Build:\\s1500452811] virtualserver_maxclients=32 virtualserver_created=0 virtualserver_codec_encryption_mode=1 virtualserver_hostmessage=L\xc3\xa9\\sServer\\sde\\sSplamy virtualserver_hostmessage_mode=0 virtualserver_default_server_group=8 virtualserver_default_channel_group=8 virtualserver_hostbanner_url virtualserver_hostbanner_gfx_url virtualserver_hostbanner_gfx_interval=2000 virtualserver_priority_speaker_dimm_modificator=-18.0000 virtualserver_id=1 virtualserver_hostbutton_tooltip virtualserver_hostbutton_url virtualserver_hostbutton_gfx_url virtualserver_name_phonetic=mob virtualserver_icon_id=2568555213 virtualserver_ip=0.0.0.0,\\s:: virtualserver_ask_for_privilegekey=0 virtualserver_hostbanner_mode=0 virtualserver_channel_temp_delete_delay_default=10 acn=ItsMe aclid=1 pv=6 lt=0 client_talk_power=-1 client_needed_serverquery_view_power=75";
+
+        let input = orig.to_vec();
+        let com = ::compress(input, 1).unwrap();
+        assert_eq!(data.as_ref(), com.as_slice());
     }
 
     #[test]
@@ -543,6 +755,17 @@ mod tests {
 
         let mut r = Cursor::new(data.as_ref());
         let dec = ::decompress(&mut r, 1024).unwrap();
+        assert_eq!(orig.as_ref(), dec.as_slice());
+    }
+
+    #[test]
+    fn roundtrip_1() {
+        let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
+
+        let comp = ::compress(orig.to_vec(), 1).unwrap();
+        let mut r = Cursor::new(comp.as_slice());
+        let dec = ::decompress(&mut r, 1024).unwrap();
+
         assert_eq!(orig.as_ref(), dec.as_slice());
     }
 }
