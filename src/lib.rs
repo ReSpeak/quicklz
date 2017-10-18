@@ -231,11 +231,11 @@ pub fn decompress(r: &mut Read, max_size: usize) -> Result<Vec<u8>> {
                         } else if next & 0x7f == 0b11 {
                             let next2 = u32::from(r.read_u8()?);
                             let next3 = u32::from(r.read_u8()?);
+                            let next4 = u32::from(r.read_u8()?);
                             matchlen = 3
-                                + ((next >> 7) | (next2 << 1)
-                                    | ((next3 & 0x7f) << 9));
+                                + ((next >> 7) | ((next2 & 0x7f) << 1));
                             offset =
-                                (next3 >> 7) | (u32::from(r.read_u8()?) << 1);
+                               (next2 >> 7) | (next3 << 1) | (next4 << 1);
                         } else {
                             matchlen = 2 + ((next >> 2) & 0x1f);
                             offset = (next >> 7)

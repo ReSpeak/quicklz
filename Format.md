@@ -12,7 +12,7 @@ Flags:
 
 - 0x01: Compressed if set
 - 0x02: Header length 9 if set, else 3
-- 0x0b: Compression level (2 bits)
+- 0x0c: Compression level (2 bits)
 - 0x10: Streaming buffer = 100 000
 - 0x20: Streaming buffer = 1 000 000
 - 0x30: Streaming buffer > 1 000 000
@@ -117,7 +117,7 @@ the destination buffer should be `source.length + 400` bytes long.
 	- `remainder = minimum(source.length - 4 - source_pos, 0xff)`
 	- `counter = hash_counter[hash(next)]`
 	- `matchlen = 0; offset = 0; best = 0`
-	- For each `index, hasht` in `hashtable` && `index < hash_counter`
+	- For each `index, hasht` in `hashtable` && `index < counter`
 		- `o = hasht[hash]`
 		- If `source[o .. +3] == next && o < source_pos - 2`
 			- Compute match length: `m = 3`
@@ -129,7 +129,7 @@ the destination buffer should be `source.length + 400` bytes long.
 				matchlen = m
 				best = index
 				```
-	- `hashtable[counter & hashtable.length][hash] = source_pos`
+	- `hashtable[counter % hashtable.length][hash] = source_pos`
 	- `hash_counter[hash] = counter + 1`
 	- If a match was found: `matchlen >= 3 && source_pos - offset < 0x1ffff`
 		- Compute relative offset: `offset = source_pos - offset`
@@ -139,7 +139,7 @@ the destination buffer should be `source.length + 400` bytes long.
 			hash = hash(next)
 			counter = hash_counter[hash]
 			hash_counter[hash]++
-			hashtable[c & hashtable.length][hash] = source_pos + u
+			hashtable[counter % hashtable.length][hash] = source_pos + u
 			```
 		- Skip match: `source_pos += matchlen`
 		- `control = (control >> 1) | (1 << 31)`
@@ -241,10 +241,10 @@ offset = o | (offset2 << 1) | (offset3 << 9)
 │o│ matchle  1 1║    offset2    ║    offset3    │
 └─┴─┴─┴─┴─┴─┴─┴─╨─┴─┴─┴─┴─┴─┴─┴─╨─┴─┴─┴─┴─┴─┴─┴─┘
 
-matchlen = 3 + (m | (matchlen1 << 1) | (matchlen2 << 9))
-offset = o | (offset2 << 1)
+matchlen = 3 + (m | (matchlen1 << 1))
+offset = o | (offset2 << 1) | (offset3 << 9)
 ┌─┬─┬─┬─┬─┬─┬─┬─╥─┬─┬─┬─┬─┬─┬─┬─╥─┬─┬─┬─┬─┬─┬─┬─╥─┬─┬─┬─┬─┬─┬─┬─┐
-│m│0 0 0 0 0 1 1║   matchlen1   ║o│  matchlen2  ║    offset2    │
+│m│0 0 0 0 0 1 1║o│ matchlen1   ║    offset2    ║    offset3    │
 └─┴─┴─┴─┴─┴─┴─┴─╨─┴─┴─┴─┴─┴─┴─┴─╨─┴─┴─┴─┴─┴─┴─┴─╨─┴─┴─┴─┴─┴─┴─┴─┘
 ```
 
