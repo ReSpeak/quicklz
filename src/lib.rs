@@ -229,10 +229,9 @@ pub fn decompress(r: &mut Read, max_size: usize) -> Result<Vec<u8>> {
                             let next2 = u32::from(r.read_u8()?);
                             let next3 = u32::from(r.read_u8()?);
                             let next4 = u32::from(r.read_u8()?);
-                            matchlen = 3
-                                + ((next >> 7) | ((next2 & 0x7f) << 1));
-                            offset =
-                               (next2 >> 7) | (next3 << 1) | (next4 << 1);
+                            matchlen =
+                                3 + ((next >> 7) | ((next2 & 0x7f) << 1));
+                            offset = (next2 >> 7) | (next3 << 1) | (next4 << 1);
                         } else {
                             matchlen = 2 + ((next >> 2) & 0x1f);
                             offset = (next >> 7)
@@ -308,12 +307,17 @@ fn is_eq<T: PartialEq>(arr: &[T]) -> bool {
 }
 
 /// Writes the qlz header at the start of the dest vec.
-fn write_header
-    (dest: &mut Vec<u8>, srclen: usize, level: u8, headerlen: u8, compressed: bool) -> Result<()> {
+fn write_header(
+    dest: &mut Vec<u8>,
+    srclen: usize,
+    level: u8,
+    headerlen: u8,
+    compressed: bool,
+) -> Result<()> {
     let flags: u8 = if compressed {
         0x01 | (level << 2) | 0x40 // (not compressed) | level | always
     } else {
-               (level << 2) | 0x40 //       compressed | level | always
+        (level << 2) | 0x40 //       compressed | level | always
     };
 
     if headerlen == 3 {
@@ -338,7 +342,7 @@ fn write_header
 fn write_control(dest: &mut Vec<u8>, ctrl_pos: usize, ctrl: u32) -> Result<()> {
     let mut vec = Vec::with_capacity(4);
     vec.write_u32::<LittleEndian>(ctrl)?;
-    dest[ctrl_pos..ctrl_pos+4].as_mut().write(&vec)?;
+    dest[ctrl_pos..ctrl_pos + 4].as_mut().write(&vec)?;
     Ok(())
 }
 
@@ -349,13 +353,18 @@ fn read_u24(inp: &[u8]) -> u32 {
 /// Compress data read from `data`.
 pub fn compress(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
     if level != 1 && level != 3 {
-        bail!("This QuickLZ implementation supports only level 1 and 3 compress");
+        bail!(
+            "This QuickLZ implementation supports only level 1 and 3 compress"
+        );
     }
     if data.len() as u64 >= (u32::max_value() - 400) as u64 {
-        bail!(format!("QuickLZ can only compress up to {}", u32::max_value() - 400));
+        bail!(format!(
+            "QuickLZ can only compress up to {}",
+            u32::max_value() - 400
+        ));
     }
 
-    let headerlen : u8 = if data.len() < 216 { 3 } else { 9 };
+    let headerlen: u8 = if data.len() < 216 { 3 } else { 9 };
     let mut dest = vec![0; headerlen as usize + 4];
 
     let mut control: u32 = 1 << 31;
@@ -371,12 +380,24 @@ pub fn compress(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
 
         while source_pos + 10 < data.len() {
             if control & 1 != 0 {
-                if source_pos > 3 * (data.len() / 4) && dest.len() > source_pos - (source_pos / 32) {
+                if source_pos > 3 * (data.len() / 4)
+                    && dest.len() > source_pos - (source_pos / 32)
+                {
                     dest.write(&data)?;
-                    write_header(&mut dest, data.len(), level, headerlen, false)?;
+                    write_header(
+                        &mut dest,
+                        data.len(),
+                        level,
+                        headerlen,
+                        false,
+                    )?;
                     return Ok(data);
                 }
-                write_control(&mut dest, control_pos, (control >> 1) | (1 << 31))?;
+                write_control(
+                    &mut dest,
+                    control_pos,
+                    (control >> 1) | (1 << 31),
+                )?;
                 control_pos = dest.len();
                 dest.write_u32::<LittleEndian>(0)?;
                 control = 1 << 31;
@@ -391,24 +412,29 @@ pub fn compress(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
             cachetable[hash] = next;
             hashtable[hash] = source_pos as u32;
 
-            if cache == next
-                && counter
+            if cache == next && counter
                 && (source_pos as u32 - offset >= 3
-                    || source_pos == (offset + 1) as usize
-                    && lits >= 3
-                    && source_pos > 3
-                    && is_eq(&data[source_pos - 3 .. source_pos + 3])) {
+                    || source_pos == (offset + 1) as usize && lits >= 3
+                        && source_pos > 3
+                        && is_eq(&data[source_pos - 3..source_pos + 3]))
+            {
                 control = (control >> 1) | (1 << 31);
                 let mut matchlen = 3;
                 let remainder = cmp::min(data.len() - 4 - source_pos, 0xff);
-                while data[offset as usize + matchlen] == data[source_pos + matchlen]
-                    && matchlen < remainder {
+                while data[offset as usize + matchlen]
+                    == data[source_pos + matchlen]
+                    && matchlen < remainder
+                {
                     matchlen += 1;
                 }
                 if matchlen < 18 {
-                    dest.write_u16::<LittleEndian>((hash << 4 | (matchlen - 2)) as u16)?;
+                    dest.write_u16::<LittleEndian>(
+                        (hash << 4 | (matchlen - 2)) as u16,
+                    )?;
                 } else {
-                    dest.write_u24::<LittleEndian>((hash << 4 | (matchlen << 16)) as u32)?;
+                    dest.write_u24::<LittleEndian>(
+                        (hash << 4 | (matchlen << 16)) as u32,
+                    )?;
                 }
                 source_pos += matchlen;
                 lits = 0;
@@ -429,18 +455,30 @@ pub fn compress(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
 
         while source_pos + 10 < data.len() {
             if control & 1 != 0 {
-                if source_pos > 3 * (data.len() / 4) && dest.len() > source_pos - (source_pos / 32) {
+                if source_pos > 3 * (data.len() / 4)
+                    && dest.len() > source_pos - (source_pos / 32)
+                {
                     dest.write(&data)?;
-                    write_header(&mut dest, data.len(), level, headerlen, false)?;
+                    write_header(
+                        &mut dest,
+                        data.len(),
+                        level,
+                        headerlen,
+                        false,
+                    )?;
                     return Ok(data);
                 }
-                write_control(&mut dest, control_pos, (control >> 1) | (1 << 31))?;
+                write_control(
+                    &mut dest,
+                    control_pos,
+                    (control >> 1) | (1 << 31),
+                )?;
                 control_pos = dest.len();
                 dest.write_u32::<LittleEndian>(0)?;
                 control = 1 << 31;
             }
 
-            let next = &data[source_pos .. source_pos+3];
+            let next = &data[source_pos..source_pos + 3];
             let remainder = cmp::min(data.len() - 4 - source_pos, 0xff);
             let hash = hash!(read_u24(next)) as usize;
             let counter = hash_counter[hash];
@@ -448,11 +486,13 @@ pub fn compress(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
             let mut offset = 0;
 
             for index in 0..hashtable_count {
-                if index as u8 >= counter { break; }
+                if index as u8 >= counter {
+                    break;
+                }
                 let hasht = &hashtable[index];
                 let o = hasht[hash] as usize;
 
-                if &data[o..o+3] == next && o + 2 < source_pos {
+                if &data[o..o + 3] == next && o + 2 < source_pos {
                     let mut m = 3;
                     while data[o + m] == data[source_pos + m] && m < remainder {
                         m += 1;
@@ -465,14 +505,16 @@ pub fn compress(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
                 }
             }
 
-            hashtable[counter as usize & (hashtable_count -1)][hash] = source_pos as u32;
+            hashtable[counter as usize & (hashtable_count - 1)][hash] =
+                source_pos as u32;
             hash_counter[hash] = counter + 1;
 
             if matchlen >= 3 && source_pos - offset < 0x1FFFF {
                 offset = source_pos - offset;
 
                 for u in 1..matchlen {
-                    let hash = hash!(read_u24(&data[(source_pos + u)..])) as usize;
+                    let hash =
+                        hash!(read_u24(&data[(source_pos + u)..])) as usize;
                     let counter = hash_counter[hash];
                     hash_counter[hash] = counter + 1;
                     hashtable[counter as usize & (hashtable_count -1)][hash] = (source_pos + u) as u32;
@@ -486,11 +528,17 @@ pub fn compress(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
                 } else if matchlen == 3 && offset < (1 << 14) {
                     dest.write_u16::<LittleEndian>(((offset << 2) | 1) as u16)?;
                 } else if (matchlen - 3) < (1 << 4) && offset < (1 << 12) {
-                    dest.write_u16::<LittleEndian>(((offset << 6) | ((matchlen - 3) << 2) | 2) as u16)?;
+                    dest.write_u16::<LittleEndian>(
+                        ((offset << 6) | ((matchlen - 3) << 2) | 2) as u16,
+                    )?;
                 } else if (matchlen - 2) < (1 << 5) {
-                    dest.write_u24::<LittleEndian>(((offset << 7) | ((matchlen - 2) << 2) | 3) as u32)?;
+                    dest.write_u24::<LittleEndian>(
+                        ((offset << 7) | ((matchlen - 2) << 2) | 3) as u32,
+                    )?;
                 } else {
-                    dest.write_u32::<LittleEndian>(((offset << 15) | ((matchlen - 3) << 7) | 3) as u32)?;
+                    dest.write_u32::<LittleEndian>(
+                        ((offset << 15) | ((matchlen - 3) << 7) | 3) as u32,
+                    )?;
                 }
             } else {
                 dest.write_u8(data[source_pos])?;
@@ -857,16 +905,24 @@ mod tests {
 
     #[test]
     fn data_compress_lvl3() {
-        let data_s = [77, 26, 106, 136, 1, 0, 128, 97, 97, 97, 131, 154, 1, 0, 98, 98, 98, 231, 1, 0, 234, 10, 97, 97, 97, 97];
-        let data_l = [79, 32, 0, 0, 0, 106, 0, 0, 0, 136, 1, 0, 128, 97, 97, 97, 131, 154, 1, 0, 98, 98, 98, 231, 1, 0, 234, 10, 97, 97, 97, 97];
+        let data_s = [
+            77, 26, 106, 136, 1, 0, 128, 97, 97, 97, 131, 154, 1, 0, 98, 98,
+            98, 231, 1, 0, 234, 10, 97, 97, 97, 97,
+        ];
+        let data_l = [
+            79, 32, 0, 0, 0, 106, 0, 0, 0, 136, 1, 0, 128, 97, 97, 97, 131,
+            154, 1, 0, 98, 98, 98, 231, 1, 0, 234, 10, 97, 97, 97, 97,
+        ];
         let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
 
         let input = orig.to_vec();
         let com = ::compress(input, 3).unwrap();
         let comsl = com.as_slice();
-        if comsl[0] & 2 != 0 { // long
+        if comsl[0] & 2 != 0 {
+            // long
             assert_eq!(data_l.as_ref(), com.as_slice());
-        } else { // short
+        } else {
+            // short
             assert_eq!(data_s.as_ref(), com.as_slice());
         }
     }
