@@ -37,23 +37,20 @@ enum DecompressState<'a> {
     Level3,
 }
 
-macro_rules! hash { 
+macro_rules! hash {
     ($val:expr) => ( (($val >> 12) ^ $val) & 0xfff )
 }
 
 /// Copy `[start; start + length)` bytes from `buf` to the end of `buf`.
+///
+/// It is expected, that `start + length` does not overflow.
 fn copy_buffer_bytes(
     buf: &mut Vec<u8>,
     mut start: usize,
     length: usize,
 ) -> Result<()> {
     let buf_len = buf.len();
-    buf.reserve(length);
-    let end = if let Some(end) = start.checked_add(length) {
-        end
-    } else {
-        bail!("Too big length in QuickLZ reference");
-    };
+    let end = start + length;
 
     // Use extend_from_slice for the longest part possible
     let copy_len = cmp::min(buf_len.saturating_sub(start), length);
@@ -331,7 +328,7 @@ fn write_header
         vec.write_u32::<LittleEndian>(dest.len() as u32)?;
         vec.write_u32::<LittleEndian>(srclen as u32)?;
         dest[0..9].as_mut().write(&vec)?;
-    } else { 
+    } else {
         unreachable!();
     };
     Ok(())
@@ -360,7 +357,7 @@ pub fn compress(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
 
     let headerlen : u8 = if data.len() < 216 { 3 } else { 9 };
     let mut dest = vec![0; headerlen as usize + 4];
-    
+
     let mut control: u32 = 1 << 31;
     let mut control_pos: usize = headerlen as usize;
     let mut source_pos = 0;
@@ -393,7 +390,7 @@ pub fn compress(data: Vec<u8>, level: u8) -> Result<Vec<u8>> {
             let next = next as u32;
             cachetable[hash] = next;
             hashtable[hash] = source_pos as u32;
-            
+
             if cache == next
                 && counter
                 && (source_pos as u32 - offset >= 3
