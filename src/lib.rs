@@ -111,7 +111,7 @@ fn update_hashtable(
 /// if data would be larger.
 ///
 /// If the incoming data are compressed using level 2, an error is returned.
-pub fn decompress(r: &mut Read, max_size: usize) -> Result<Vec<u8>> {
+pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
     let mut res = Vec::new();
     let mut control: u32 = 1;
 
@@ -128,26 +128,26 @@ pub fn decompress(r: &mut Read, max_size: usize) -> Result<Vec<u8>> {
     let dec_size;
     let comp_size;
     if header_len == 3 {
-        comp_size = r.read_u8()? as usize;
-        dec_size = r.read_u8()? as usize;
+        comp_size = r.read_u8()? as u32;
+        dec_size = r.read_u8()? as u32;
     } else {
-        comp_size = r.read_u32::<LittleEndian>()? as usize;
-        dec_size = r.read_u32::<LittleEndian>()? as usize;
+        comp_size = r.read_u32::<LittleEndian>()?;
+        dec_size = r.read_u32::<LittleEndian>()?;
     }
     if dec_size > max_size {
         bail!("Maximum uncompressed size exceeded");
     }
-    res.reserve(dec_size);
+    res.reserve(dec_size as usize);
     if flags & 1 != 1 {
         // Uncompressed
-        if comp_size + header_len != dec_size {
+        if comp_size - header_len != dec_size {
             bail!(
                 "Compressed and uncompressed size of uncompressed data do not \
                  match"
             );
         }
         // Uncompressed
-        res.resize(dec_size, 0);
+        res.resize(dec_size as usize, 0);
         r.read_exact(&mut res)?;
         return Ok(res);
     }
@@ -188,7 +188,7 @@ pub fn decompress(r: &mut Read, max_size: usize) -> Result<Vec<u8>> {
 
                         // Check the size
                         if let Some(len) =
-                            res.len().checked_add(matchlen as usize)
+                            (res.len() as u32).checked_add(matchlen as u32)
                         {
                             if len > dec_size {
                                 bail!("Decompressed size exceeded");
@@ -247,7 +247,7 @@ pub fn decompress(r: &mut Read, max_size: usize) -> Result<Vec<u8>> {
 
                         // Check the size
                         if let Some(len) =
-                            res.len().checked_add(matchlen as usize)
+                            (res.len() as u32).checked_add(matchlen as u32)
                         {
                             if len > dec_size {
                                 bail!("Decompressed size exceeded");
@@ -259,8 +259,8 @@ pub fn decompress(r: &mut Read, max_size: usize) -> Result<Vec<u8>> {
                         copy_buffer_bytes(&mut res, start, matchlen as usize)?;
                     }
                 }
-            } else if res.len() >= cmp::max(dec_size, 10) - 10 {
-                while res.len() < dec_size {
+            } else if res.len() >= cmp::max(dec_size as usize, 10) - 10 {
+                while res.len() < dec_size as usize {
                     if control == 1 {
                         r.read_u32::<LittleEndian>()?;
                     }
@@ -271,7 +271,7 @@ pub fn decompress(r: &mut Read, max_size: usize) -> Result<Vec<u8>> {
             } else {
                 // Check the size
                 if let Some(len) = res.len().checked_add(1) {
-                    if len > dec_size {
+                    if len > dec_size as usize {
                         bail!("Decompressed size exceeded");
                     }
                 } else {
@@ -340,9 +340,7 @@ fn write_header(
 
 /// Writes an u32 control sequence.
 fn write_control(dest: &mut Vec<u8>, ctrl_pos: usize, ctrl: u32) -> Result<()> {
-    let mut vec = Vec::with_capacity(4);
-    vec.write_u32::<LittleEndian>(ctrl)?;
-    dest[ctrl_pos..ctrl_pos + 4].as_mut().write(&vec)?;
+    dest[ctrl_pos..ctrl_pos + 4].as_mut().write_u32::<LittleEndian>(ctrl)?;
     Ok(())
 }
 
