@@ -782,7 +782,7 @@ mod tests {
         let orig = b"initserver virtualserver_name=Server\\sder\\sVerplanten virtualserver_welcomemessage=This\\sis\\sSplamys\\sWorld virtualserver_platform=Linux virtualserver_version=3.0.13.8\\s[Build:\\s1500452811] virtualserver_maxclients=32 virtualserver_created=0 virtualserver_codec_encryption_mode=1 virtualserver_hostmessage=L\xc3\xa9\\sServer\\sde\\sSplamy virtualserver_hostmessage_mode=0 virtualserver_default_server_group=8 virtualserver_default_channel_group=8 virtualserver_hostbanner_url virtualserver_hostbanner_gfx_url virtualserver_hostbanner_gfx_interval=2000 virtualserver_priority_speaker_dimm_modificator=-18.0000 virtualserver_id=1 virtualserver_hostbutton_tooltip virtualserver_hostbutton_url virtualserver_hostbutton_gfx_url virtualserver_name_phonetic=mob virtualserver_icon_id=2568555213 virtualserver_ip=0.0.0.0,\\s:: virtualserver_ask_for_privilegekey=0 virtualserver_hostbanner_mode=0 virtualserver_channel_temp_delete_delay_default=10 acn=ItsMe aclid=1 pv=6 lt=0 client_talk_power=-1 client_needed_serverquery_view_power=75";
 
         let input = orig.to_vec();
-        let com = ::compress(input, 1).unwrap();
+        let com = ::compress(&input, ::CompressionLevel::Lvl1);
         assert_eq!(data.as_ref(), com.as_slice());
     }
 
@@ -912,7 +912,7 @@ mod tests {
     fn roundtrip_lvl1() {
         let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
 
-        let comp = ::compress(orig.to_vec(), 1).unwrap();
+        let comp = ::compress(orig, ::CompressionLevel::Lvl1);
         let mut r = Cursor::new(comp.as_slice());
         let dec = ::decompress(&mut r, 1024).unwrap();
 
@@ -923,7 +923,7 @@ mod tests {
     fn roundtrip_lvl3() {
         let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
 
-        let comp = ::compress(orig.to_vec(), 3).unwrap();
+        let comp = ::compress(orig, ::CompressionLevel::Lvl3);
         let mut r = Cursor::new(comp.as_slice());
         let dec = ::decompress(&mut r, 1024).unwrap();
 
@@ -943,7 +943,7 @@ mod tests {
         let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
 
         let input = orig.to_vec();
-        let com = ::compress(input, 3).unwrap();
+        let com = ::compress(&input, ::CompressionLevel::Lvl3);
         let comsl = com.as_slice();
         if comsl[0] & 2 != 0 {
             // long
