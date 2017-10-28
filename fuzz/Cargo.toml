@@ -1,0 +1,26 @@
+
+[package]
+name = "quicklz-fuzz"
+version = "0.0.1"
+authors = ["Automatically generated"]
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies.quicklz]
+path = ".."
+[dependencies.libfuzzer-sys]
+git = "https://github.com/rust-fuzz/libfuzzer-sys.git"
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "compress"
+path = "fuzz_targets/compress.rs"
+
+[[bin]]
+name = "decompress"
+path = "fuzz_targets/decompress.rs"
