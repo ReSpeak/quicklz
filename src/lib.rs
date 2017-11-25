@@ -5,15 +5,20 @@
 #![cfg_attr(feature = "cargo-clippy",
            allow(verbose_bit_mask, unreadable_literal))]
 
+#![feature(test)]
+
 extern crate byteorder;
 #[macro_use]
 extern crate error_chain;
+extern crate bit_vec;
+extern crate test;
 
 use std::cell::RefCell;
 use std::cmp;
 use std::io::{Read, Write};
-
+use bit_vec::BitVec;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use errors::*;
 
 #[allow(unused_doc_comment)]
 pub mod errors {
@@ -24,12 +29,25 @@ pub mod errors {
         }
     }
 }
-use errors::*;
 
-// A thread local buffer for the hashtable so it does not have to be
-// reallocated.
-thread_local!(static HASHTABLE: RefCell<Box<[u32; 4096]>>
-    = RefCell::new(Box::new([0; 4096])));
+const HASHTABLE_SIZE: usize = 4096;
+// hashtable_count MUST be 2^x for maximum efficiency
+const HASHTABLE_COUNT: usize = 1 << 4;
+
+// Thread-local buffers for various hashtables used by different
+// (de-)compression levels so they don't have to be reallocated each call.
+thread_local! {
+    static HASHTABLE: RefCell<Box<[u32; HASHTABLE_SIZE]>>
+        = RefCell::new(Box::new([0; HASHTABLE_SIZE]));
+    static HASHTABLE_ARR: RefCell<Box<[[u32; HASHTABLE_SIZE]; HASHTABLE_COUNT]>>
+        = RefCell::new(Box::new([[0; HASHTABLE_SIZE]; HASHTABLE_COUNT]));
+    static CACHETABLE: RefCell<Box<[u32; HASHTABLE_SIZE]>>
+        = RefCell::new(Box::new([0; HASHTABLE_SIZE]));
+    static HASHCOUNTER_U8: RefCell<Box<[u8; HASHTABLE_SIZE]>>
+        = RefCell::new(Box::new([0; HASHTABLE_SIZE]));
+    static HASHCOUNTER_BIT: RefCell<BitVec>
+        = RefCell::new(BitVec::from_elem(HASHTABLE_SIZE, false));
+}
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum CompressionLevel {
@@ -49,7 +67,7 @@ impl CompressionLevel {
 /// The state while decompressing.
 enum DecompressState<'a> {
     /// Next hash position, hashtable
-    Level1(usize, &'a mut [u32; 4096]),
+    Level1(usize, &'a mut [u32; HASHTABLE_SIZE]),
     Level3,
 }
 
@@ -89,7 +107,7 @@ fn copy_buffer_bytes(
 
 /// Updates the hashtable for the data in `dest` between `start` and `end`.
 fn update_hashtable(
-    hashtable: &mut [u32; 4096],
+    hashtable: &mut [u32; HASHTABLE_SIZE],
     dest: &[u8],
     start: usize,
     end: usize,
@@ -355,38 +373,38 @@ fn is_eq<T: PartialEq>(arr: &[T]) -> bool {
 
 /// Writes the qlz header at the start of the dest vec.
 fn write_header(
-    dest: &mut Vec<u8>,
+    dest: &mut [u8],
+    dest_len: usize,
     srclen: usize,
     level: u8,
-    headerlen: u8,
     compressed: bool,
 ) -> Result<()> {
     let flags: u8 = if compressed {
-        0x01 | (level << 2) | 0x40 // (not compressed) | level | always
+        0x01 | (level << 2) | 0x40 // compressed | level | always
     } else {
-        (level << 2) | 0x40 //       compressed | level | always
+        (level << 2) | 0x40 //  (not compressed) | level | always
     };
 
-    if headerlen == 3 {
+    if dest.len() == 3 {
         // short header
         dest[0] = flags;
-        dest[1] = dest.len() as u8;
+        dest[1] = dest_len as u8;
         dest[2] = srclen as u8;
-    } else if headerlen == 9 {
+    } else if dest.len() == 9 {
         // long header
         let mut vec = vec![];
         vec.write_u8(flags | 0x02)?;
-        vec.write_u32::<LittleEndian>(dest.len() as u32)?;
+        vec.write_u32::<LittleEndian>(dest_len as u32)?;
         vec.write_u32::<LittleEndian>(srclen as u32)?;
-        dest[0..9].as_mut().write_all(&vec)?;
+        dest.copy_from_slice(&vec);
     } else {
-        unreachable!();
-    };
+        panic!("The header length must be either 3 or 9.");
+    }
     Ok(())
 }
 
 /// Writes an u32 control sequence.
-fn write_control(dest: &mut Vec<u8>, ctrl_pos: usize, ctrl: u32) -> Result<()> {
+fn write_control(dest: &mut [u8], ctrl_pos: usize, ctrl: u32) -> Result<()> {
     dest[ctrl_pos..ctrl_pos + 4]
         .as_mut()
         .write_u32::<LittleEndian>(ctrl)?;
@@ -406,46 +424,30 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
     }
 
     let headerlen: u8 = if data.len() < 216 { 3 } else { 9 };
-    let mut dest = vec![0; headerlen as usize + 4];
+    let mut dest = vec![0 as u8; headerlen as usize + 4];
 
     let mut control: u32 = 1 << 31;
     let mut control_pos: usize = headerlen as usize;
     let mut source_pos = 0;
 
+    let mut done = false;
+
     if level == CompressionLevel::Lvl1 {
+        HASHTABLE.with(|hashtable| -> Result<()> {
+        HASHCOUNTER_BIT.with(|hash_counter| -> Result<()> {
+        CACHETABLE.with(|cachetable| -> Result<()> {
+
+        let mut hashtable = hashtable.borrow_mut();
+        let mut hash_counter = hash_counter.borrow_mut();
+        let mut cachetable = cachetable.borrow_mut();
+
         let mut lits: u32 = 0;
 
-        let mut hashtable = vec![0 as u32; 4096];
-        let mut hash_counter = vec![false; 4096];
-        let mut cachetable = vec![0 as u32; 4096];
-
         while source_pos + 10 < data.len() {
-            if control & 1 != 0 {
-                if source_pos > 3 * (data.len() / 4)
-                    && dest.len() > source_pos - (source_pos / 32)
-                {
-                    let headerlen = if data.len() > 255 { 9 } else { 3 };
-                    dest.clear();
-                    dest.reserve(headerlen + data.len());
-                    dest.resize(headerlen, 0);
-                    dest.write_all(data).unwrap();
-                    write_header(
-                        &mut dest,
-                        data.len(),
-                        level.as_u8(),
-                        headerlen as u8,
-                        false,
-                    ).unwrap();
-                    return dest;
-                }
-                write_control(
-                    &mut dest,
-                    control_pos,
-                    (control >> 1) | (1 << 31),
-                ).unwrap();
-                control_pos = dest.len();
-                dest.write_u32::<LittleEndian>(0).unwrap();
-                control = 1 << 31;
+            if check_inefficient(& mut control, source_pos, level,
+                &mut control_pos, &mut dest, data) {
+                    done = true;
+                    return Ok(());
             }
 
             let next = read_u24(&data[source_pos..]);
@@ -454,7 +456,6 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
             let offset = hashtable[hash_i];
             let cache = cachetable[hash_i];
             let counter = hash_counter[hash_i];
-            let next = next as u32;
             cachetable[hash_i] = next;
             hashtable[hash_i] = source_pos as u32;
 
@@ -486,46 +487,29 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
                 lits = 0;
             } else {
                 lits += 1;
-                hash_counter[hash_i] = true;
+                hash_counter.set(hash_i, true);
 
                 dest.write_u8(data[source_pos]).unwrap();
                 source_pos += 1;
                 control >>= 1;
             }
         }
-    } else if level == CompressionLevel::Lvl3 {
-        let hashtable_count = 1 << 4; // hashtable_count MUST be 2^x
+        Ok(())})?;
+        Ok(())})?;
+        Ok(())}).unwrap();
 
-        let mut hashtable = vec![vec![0 as u32; 4096]; hashtable_count];
-        let mut hash_counter = vec![0 as u8; 4096];
+    } else if level == CompressionLevel::Lvl3 {
+        HASHTABLE_ARR.with(|hashtable| -> Result<()> {
+        HASHCOUNTER_U8.with(|hash_counter| -> Result<()> {
+
+        let mut hashtable = hashtable.borrow_mut();
+        let mut hash_counter = hash_counter.borrow_mut();
 
         while source_pos + 10 < data.len() {
-            if control & 1 != 0 {
-                if source_pos > 3 * (data.len() / 4)
-                    && dest.len() > source_pos - (source_pos / 32)
-                {
-                    let headerlen = if data.len() > 255 { 9 } else { 3 };
-                    dest.clear();
-                    dest.reserve(headerlen + data.len());
-                    dest.resize(headerlen, 0);
-                    dest.write_all(data).unwrap();
-                    write_header(
-                        &mut dest,
-                        data.len(),
-                        level.as_u8(),
-                        headerlen as u8,
-                        false,
-                    ).unwrap();
-                    return dest;
-                }
-                write_control(
-                    &mut dest,
-                    control_pos,
-                    (control >> 1) | (1 << 31),
-                ).unwrap();
-                control_pos = dest.len();
-                dest.write_u32::<LittleEndian>(0).unwrap();
-                control = 1 << 31;
+            if check_inefficient(& mut control, source_pos, level,
+                &mut control_pos, &mut dest, data) {
+                    done = true;
+                    return Ok(());
             }
 
             let next = &data[source_pos..source_pos + 3];
@@ -536,7 +520,7 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
             let mut offset = 0;
 
             #[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
-            for index in 0..hashtable_count {
+            for index in 0..HASHTABLE_COUNT {
                 if index as u8 >= counter {
                     break;
                 }
@@ -556,7 +540,7 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
                 }
             }
 
-            hashtable[counter as usize & (hashtable_count - 1)][hash] =
+            hashtable[counter as usize % HASHTABLE_COUNT][hash] =
                 source_pos as u32;
             hash_counter[hash] = counter + 1;
 
@@ -570,7 +554,7 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
                         ::hash(read_u24(&data[(source_pos + u)..])) as usize;
                     let counter = hash_counter[hash];
                     hash_counter[hash] = counter + 1;
-                    hashtable[counter as usize & (hashtable_count -1)][hash] = (source_pos + u) as u32;
+                    hashtable[counter as usize % HASHTABLE_COUNT][hash] = (source_pos + u) as u32;
                 }
 
                 source_pos += matchlen;
@@ -600,6 +584,13 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
                 control >>= 1;
             }
         }
+
+        Ok(())})?;
+        Ok(())}).unwrap();
+    }
+
+    if done {
+        return dest;
     }
 
     while source_pos < data.len() {
@@ -620,9 +611,48 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
     }
     write_control(&mut dest, control_pos, (control >> 1) | (1 << 31)).unwrap();
 
-    write_header(&mut dest, data.len(), level.as_u8(), headerlen, true)
+    let dest_len = dest.len();
+    write_header(&mut dest[0..(headerlen as usize)], dest_len, data.len(), level.as_u8(), true)
         .unwrap();
     dest
+}
+
+#[cfg_attr(feature = "cargo-clippy", allow(inline_always))]
+// inline gives about 15%-20% performance boost since this method is used
+// at a hot point of the compression method.
+#[inline(always)]
+fn check_inefficient(control: &mut u32, source_pos: usize,
+    level: CompressionLevel, control_pos: &mut usize, dest: &mut Vec<u8>,
+    data: &[u8]) -> bool {
+    if *control & 1 != 0 {
+        if source_pos > 3 * (data.len() / 4)
+            && dest.len() > source_pos - (source_pos / 32)
+        {
+            let headerlen = if data.len() > 255 { 9 } else { 3 };
+            dest.clear();
+            dest.reserve(headerlen + data.len());
+            dest.resize(headerlen, 0);
+            dest.write_all(data).unwrap();
+            let dest_len = dest.len();
+            write_header(
+                &mut dest[0..headerlen],
+                dest_len,
+                data.len(),
+                level.as_u8(),
+                false,
+            ).unwrap();
+            return true;
+        }
+        write_control(
+            dest,
+            *control_pos,
+            (*control >> 1) | (1 << 31),
+        ).unwrap();
+        *control_pos = dest.len();
+        dest.write_u32::<LittleEndian>(0).unwrap();
+        *control = 1 << 31;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -981,5 +1011,35 @@ mod tests {
             // short
             assert_eq!(data_s.as_ref(), com.as_slice());
         }
+    }
+
+    use super::*;
+    use test::Bencher;
+    use std::fs::File;
+
+    #[bench]
+    fn perf_compress_lvl1(b: &mut Bencher) {
+        let mut f = File::open("bench/bench.txt").expect("file not found");
+
+        let mut contents = vec![];
+        f.read_to_end(&mut contents)
+            .expect("something went wrong reading the file");
+
+        b.iter(|| {
+            ::compress(contents.as_slice(), ::CompressionLevel::Lvl1);
+        });
+    }
+
+    #[bench]
+    fn perf_compress_lvl3(b: &mut Bencher) {
+        let mut f = File::open("bench/bench.txt").expect("file not found");
+
+        let mut contents = vec![];
+        f.read_to_end(&mut contents)
+            .expect("something went wrong reading the file");
+
+        b.iter(|| {
+            ::compress(contents.as_slice(), ::CompressionLevel::Lvl3);
+        });
     }
 }
