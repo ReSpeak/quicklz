@@ -5,12 +5,13 @@
 #![cfg_attr(feature = "cargo-clippy",
            allow(verbose_bit_mask, unreadable_literal))]
 
-#![feature(test)]
+#![cfg_attr(feature = "nightly", feature(test))]
 
 extern crate byteorder;
 #[macro_use]
 extern crate error_chain;
 extern crate bit_vec;
+#[cfg(feature = "nightly")]
 extern crate test;
 
 use std::cell::RefCell;
@@ -424,7 +425,7 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
     }
 
     let headerlen: u8 = if data.len() < 216 { 3 } else { 9 };
-    let mut dest = vec![0 as u8; headerlen as usize + 4];
+    let mut dest = vec![0u8; headerlen as usize + 4];
 
     let mut control: u32 = 1 << 31;
     let mut control_pos: usize = headerlen as usize;
@@ -542,7 +543,7 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
 
             hashtable[counter as usize % HASHTABLE_COUNT][hash] =
                 source_pos as u32;
-            hash_counter[hash] = counter + 1;
+            hash_counter[hash] = counter.wrapping_add(1);
 
             if matchlen >= 3 && source_pos - offset < 0x1FFFF {
                 offset = source_pos - offset;
@@ -553,7 +554,7 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
                     let hash =
                         ::hash(read_u24(&data[(source_pos + u)..])) as usize;
                     let counter = hash_counter[hash];
-                    hash_counter[hash] = counter + 1;
+                    hash_counter[hash] = counter.wrapping_add(1);
                     hashtable[counter as usize % HASHTABLE_COUNT][hash] = (source_pos + u) as u32;
                 }
 
@@ -612,8 +613,8 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
     write_control(&mut dest, control_pos, (control >> 1) | (1 << 31)).unwrap();
 
     let dest_len = dest.len();
-    write_header(&mut dest[0..(headerlen as usize)], dest_len, data.len(), level.as_u8(), true)
-        .unwrap();
+    write_header(&mut dest[0..(headerlen as usize)], dest_len, data.len(),
+        level.as_u8(), true).unwrap();
     dest
 }
 
@@ -630,7 +631,11 @@ fn check_inefficient(control: &mut u32, source_pos: usize,
         {
             let headerlen = if data.len() > 255 { 9 } else { 3 };
             dest.clear();
+            // To prevent a double allocation we reserve the exact size needed
+            // for the header and data.
             dest.reserve(headerlen + data.len());
+            // Now we fill the header size with zeros since it will be
+            // written by the write_header method.
             dest.resize(headerlen, 0);
             dest.write_all(data).unwrap();
             let dest_len = dest.len();
@@ -643,11 +648,7 @@ fn check_inefficient(control: &mut u32, source_pos: usize,
             ).unwrap();
             return true;
         }
-        write_control(
-            dest,
-            *control_pos,
-            (*control >> 1) | (1 << 31),
-        ).unwrap();
+        write_control(dest, *control_pos, (*control >> 1) | (1 << 31)).unwrap();
         *control_pos = dest.len();
         dest.write_u32::<LittleEndian>(0).unwrap();
         *control = 1 << 31;
@@ -1012,7 +1013,10 @@ mod tests {
             assert_eq!(data_s.as_ref(), com.as_slice());
         }
     }
+}
 
+#[cfg(feature = "nightly")]
+mod bench {
     use super::*;
     use test::Bencher;
     use std::fs::File;
