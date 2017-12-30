@@ -1,0 +1,8 @@
+[package]
+name = "afl-fuzz"
+version = "0.1.0"
+authors = ["Flakebi <flakebi@t-online.de>"]
+
+[dependencies]
+afl = "0.3"
+quicklz = { git = "https://github.com/ReSpeak/quicklz.git" }

@@ -17,8 +17,8 @@ fuzz_target!(|data: &[u8]| {
 
 fn test(data: &[u8]) -> Result<()> {
     // Compress data
-    let lvl1 = compress(data, 1)?;
-    let lvl3 = compress(data, 3)?;
+    let lvl1 = compress(data, CompressionLevel::Lvl1);
+    let lvl3 = compress(data, CompressionLevel::Lvl3);
 
     // Try to decompress again
     let dec1 = decompress(&mut Cursor::new(&lvl1), data.len() as u32)?;
