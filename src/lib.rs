@@ -8,9 +8,9 @@
 #![cfg_attr(feature = "nightly", feature(test))]
 
 extern crate byteorder;
-#[macro_use]
-extern crate error_chain;
 extern crate bit_vec;
+#[macro_use]
+extern crate failure;
 #[cfg(feature = "nightly")]
 extern crate test;
 
@@ -19,17 +19,8 @@ use std::cmp;
 use std::io::{Read, Write};
 use bit_vec::BitVec;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use errors::*;
 
-#[allow(unused_doc_comment)]
-pub mod errors {
-    // Create the Error, ErrorKind, ResultExt, and Result types
-    error_chain! {
-        foreign_links {
-            Io(::std::io::Error);
-        }
-    }
-}
+type Result<T> = std::result::Result<T, Error>;
 
 const HASHTABLE_SIZE: usize = 4096;
 // hashtable_count MUST be 2^x for maximum efficiency
@@ -48,6 +39,23 @@ thread_local! {
         = RefCell::new(Box::new([0; HASHTABLE_SIZE]));
     static HASHCOUNTER_BIT: RefCell<BitVec>
         = RefCell::new(BitVec::from_elem(HASHTABLE_SIZE, false));
+}
+
+#[derive(Fail, Debug)]
+pub enum Error {
+    #[fail(display = "{}", _0)]
+    Io(std::io::Error),
+    #[fail(display = "Unsupported QuickLZ level, this library only supports \
+        level 1 and 3")]
+    UnsupportedLevel,
+    #[fail(display = "{}", _0)]
+    CorruptData(String),
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Error::Io(e)
+    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -98,9 +106,8 @@ fn copy_buffer_bytes(
 
     // Copy the rest in a loop
     for i in start..end {
-        let val = *buf.get(i).ok_or_else::<Error, _>(
-            || "Invalid back reference in QuickLZ".into(),
-        )?;
+        let val = *buf.get(i).ok_or_else(|| Error::CorruptData(String::from(
+            "Invalid back reference in QuickLZ")))?;
         buf.push(val);
     }
     Ok(())
@@ -158,10 +165,10 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
     let flags = r.read_u8()?;
     let level = (flags >> 2) & 0b11;
     if level != 3 && level != 1 {
-        bail!(
+        return Err(Error::CorruptData(String::from(
             "This QuickLZ implementation supports only level 1 and 3 \
              decompress"
-        );
+        )));
     }
     let header_len = if flags & 2 == 2 { 9 } else { 3 };
     let dec_size;
@@ -174,25 +181,26 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
         dec_size = r.read_u32::<LittleEndian>()?;
     }
     if dec_size > max_size {
-        bail!(
+        return Err(Error::CorruptData(format!(
             "Maximum uncompressed size exceeded: {}/{}",
             dec_size,
             max_size
-        );
+        )));
     }
     if comp_size < header_len {
-        bail!("Invalid compressed size: {}", comp_size);
+        return Err(Error::CorruptData(format!(
+            "Invalid compressed size: {}", comp_size)));
     }
     res.reserve(dec_size as usize);
     if flags & 1 != 1 {
         // Uncompressed
         if comp_size - header_len != dec_size {
-            bail!(
+            return Err(Error::CorruptData(format!(
                 "Compressed and uncompressed size of uncompressed data do not \
                  match ({} != {})",
                 comp_size - header_len,
                 dec_size,
-            );
+            )));
         }
         // Uncompressed
         res.resize(dec_size as usize, 0);
@@ -231,15 +239,16 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
                             matchlen = r.read_u8()?;
                         }
                         if matchlen < 3 {
-                            bail!(
+                            return Err(Error::CorruptData(format!(
                                 "Too small length for QuickLZ reference ({})",
                                 matchlen
-                            );
+                            )));
                         }
                         let offset = *hashtable
                             .get(hash as usize)
-                            .ok_or_else::<Error, _>(
-                                || "Invalid QuickLZ hashtable entry".into(),
+                            .ok_or_else(||
+                                Error::CorruptData(String::from(
+                                    "Invalid QuickLZ hashtable entry"))
                             )?;
 
                         // Check the size
@@ -247,16 +256,16 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
                             (res.len() as u32).checked_add(u32::from(matchlen))
                         {
                             if len > dec_size {
-                                bail!(
+                                return Err(Error::CorruptData(format!(
                                     "Decompressed size exceeded ({})",
                                     dec_size
-                                );
+                                )));
                             }
                         } else {
-                            bail!(
+                            return Err(Error::CorruptData(format!(
                                 "Too big length in QuickLZ reference ({})",
                                 matchlen
-                            );
+                            )));
                         };
 
                         copy_buffer_bytes(
@@ -303,7 +312,8 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
 
                         // Insert reference
                         if res.len() < offset as usize {
-                            bail!("Too big offset in QuickLZ reference");
+                            return Err(Error::CorruptData(String::from(
+                                "Too big offset in QuickLZ reference")));
                         }
                         let start = res.len() - offset as usize;
 
@@ -312,16 +322,16 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
                             (res.len() as u32).checked_add(matchlen as u32)
                         {
                             if len > dec_size {
-                                bail!(
+                                return Err(Error::CorruptData(format!(
                                     "Decompressed size exceeded ({})",
                                     dec_size
-                                );
+                                )));
                             }
                         } else {
-                            bail!(
+                            return Err(Error::CorruptData(format!(
                                 "Too big length in QuickLZ reference ({})",
                                 matchlen
-                            );
+                            )));
                         };
 
                         copy_buffer_bytes(&mut res, start, matchlen as usize)?;
@@ -340,10 +350,10 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
                 // Check the size
                 if let Some(len) = res.len().checked_add(1) {
                     if len > dec_size as usize {
-                        bail!("Decompressed size exceeded ({})", dec_size);
+                        return Err(Error::CorruptData(format!("Decompressed size exceeded ({})", dec_size)));
                     }
                 } else {
-                    bail!("Decompressed size exceeded ({})", dec_size);
+                    return Err(Error::CorruptData(format!("Decompressed size exceeded ({})", dec_size)));
                 };
 
                 res.push(r.read_u8()?);
