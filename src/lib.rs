@@ -44,10 +44,18 @@ thread_local! {
 #[derive(Fail, Debug)]
 pub enum Error {
     #[fail(display = "{}", _0)]
-    Io(std::io::Error),
+    Io(#[cause] std::io::Error),
+    /// This library supports only level 1 and 3 if another level is detected,
+    /// this error will be returned.
     #[fail(display = "Unsupported QuickLZ level, this library only supports \
         level 1 and 3")]
     UnsupportedLevel,
+    /// If the given maximum decompressed size is exceeded, this error will be
+    /// returned.
+    #[fail(display = "Maximum uncompressed size exceeded: {}/{}", dec, max)]
+    SizeLimitExceeded { dec: u32, max: u32 },
+    /// If the compressed data cannot be decompressed, this error will be
+    /// returned, containing a short description.
     #[fail(display = "{}", _0)]
     CorruptData(String),
 }
@@ -134,7 +142,7 @@ fn read_u24(inp: &[u8]) -> u32 {
 ///
 /// # Example
 /// ```
-/// # (|| -> quicklz::errors::Result<()> {
+/// # (|| -> Result<(), quicklz::Error> {
 /// let data = [
 ///     0x47, 0x17, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00,
 ///     0x00, 0x80, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -165,10 +173,7 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
     let flags = r.read_u8()?;
     let level = (flags >> 2) & 0b11;
     if level != 3 && level != 1 {
-        return Err(Error::CorruptData(String::from(
-            "This QuickLZ implementation supports only level 1 and 3 \
-             decompress"
-        )));
+        return Err(Error::UnsupportedLevel);
     }
     let header_len = if flags & 2 == 2 { 9 } else { 3 };
     let dec_size;
@@ -181,11 +186,7 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
         dec_size = r.read_u32::<LittleEndian>()?;
     }
     if dec_size > max_size {
-        return Err(Error::CorruptData(format!(
-            "Maximum uncompressed size exceeded: {}/{}",
-            dec_size,
-            max_size
-        )));
+        return Err(Error::SizeLimitExceeded { dec: dec_size, max: max_size });
     }
     if comp_size < header_len {
         return Err(Error::CorruptData(format!(
