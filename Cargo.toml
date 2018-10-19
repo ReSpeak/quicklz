@@ -27,7 +27,7 @@ name = "quicklz"
 path = "src/lib.rs"
 
 [dependencies]
-bit-vec = "0.4"
+bit-vec = "0.5"
 byteorder = "1"
 failure = "0.1"
 
