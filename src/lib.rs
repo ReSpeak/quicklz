@@ -2,23 +2,21 @@
 //! algorithm version 1.5.0 (latest version since 2011). Compression and
 //! decompression are implemented for the compression levels 1 and 3.
 
-#![cfg_attr(feature = "cargo-clippy",
-           allow(verbose_bit_mask, unreadable_literal))]
-
+#![cfg_attr(
+    feature = "cargo-clippy",
+    allow(verbose_bit_mask, unreadable_literal)
+)]
 #![cfg_attr(feature = "nightly", feature(test))]
 
-extern crate byteorder;
-extern crate bit_vec;
-#[macro_use]
-extern crate failure;
+use thiserror::Error as ThisError;
 #[cfg(feature = "nightly")]
 extern crate test;
 
+use bit_vec::BitVec;
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::cell::RefCell;
 use std::cmp;
 use std::io::{Read, Write};
-use bit_vec::BitVec;
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 type Result<T> = std::result::Result<T, Error>;
 
@@ -41,29 +39,24 @@ thread_local! {
         = RefCell::new(BitVec::from_elem(HASHTABLE_SIZE, false));
 }
 
-#[derive(Fail, Debug)]
+#[derive(ThisError, Debug)]
 pub enum Error {
-    #[fail(display = "{}", _0)]
-    Io(#[cause] std::io::Error),
+    #[error("{0}")]
+    Io(#[from] ::std::io::Error),
     /// This library supports only level 1 and 3 if another level is detected,
     /// this error will be returned.
-    #[fail(display = "Unsupported QuickLZ level, this library only supports \
-        level 1 and 3")]
+    #[error(
+        "Unsupported QuickLZ level, this library only supports level 1 and 3"
+    )]
     UnsupportedLevel,
     /// If the given maximum decompressed size is exceeded, this error will be
     /// returned.
-    #[fail(display = "Maximum uncompressed size exceeded: {}/{}", dec, max)]
+    #[error("Maximum uncompressed size exceeded: {}/{}", dec, max)]
     SizeLimitExceeded { dec: u32, max: u32 },
     /// If the compressed data cannot be decompressed, this error will be
     /// returned, containing a short description.
-    #[fail(display = "{}", _0)]
+    #[error("{0}")]
     CorruptData(String),
-}
-
-impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Self {
-        Error::Io(e)
-    }
 }
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
@@ -114,8 +107,11 @@ fn copy_buffer_bytes(
 
     // Copy the rest in a loop
     for i in start..end {
-        let val = *buf.get(i).ok_or_else(|| Error::CorruptData(String::from(
-            "Invalid back reference in QuickLZ")))?;
+        let val = *buf.get(i).ok_or_else(|| {
+            Error::CorruptData(String::from(
+                "Invalid back reference in QuickLZ",
+            ))
+        })?;
         buf.push(val);
     }
     Ok(())
@@ -165,7 +161,7 @@ fn read_u24(inp: &[u8]) -> u32 {
 /// if data would be larger.
 ///
 /// If the incoming data are compressed using level 2, an error is returned.
-pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
+pub fn decompress(r: &mut impl Read, max_size: u32) -> Result<Vec<u8>> {
     let mut res = Vec::new();
     let mut control: u32 = 1;
 
@@ -186,11 +182,16 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
         dec_size = r.read_u32::<LittleEndian>()?;
     }
     if dec_size > max_size {
-        return Err(Error::SizeLimitExceeded { dec: dec_size, max: max_size });
+        return Err(Error::SizeLimitExceeded {
+            dec: dec_size,
+            max: max_size,
+        });
     }
     if comp_size < header_len {
         return Err(Error::CorruptData(format!(
-            "Invalid compressed size: {}", comp_size)));
+            "Invalid compressed size: {}",
+            comp_size
+        )));
     }
     res.reserve(dec_size as usize);
     if flags & 1 != 1 {
@@ -245,12 +246,12 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
                                 matchlen
                             )));
                         }
-                        let offset = *hashtable
-                            .get(hash as usize)
-                            .ok_or_else(||
+                        let offset =
+                            *hashtable.get(hash as usize).ok_or_else(|| {
                                 Error::CorruptData(String::from(
-                                    "Invalid QuickLZ hashtable entry"))
-                            )?;
+                                    "Invalid QuickLZ hashtable entry",
+                                ))
+                            })?;
 
                         // Check the size
                         if let Some(len) =
@@ -314,7 +315,8 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
                         // Insert reference
                         if res.len() < offset as usize {
                             return Err(Error::CorruptData(String::from(
-                                "Too big offset in QuickLZ reference")));
+                                "Too big offset in QuickLZ reference",
+                            )));
                         }
                         let start = res.len() - offset as usize;
 
@@ -351,10 +353,16 @@ pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
                 // Check the size
                 if let Some(len) = res.len().checked_add(1) {
                     if len > dec_size as usize {
-                        return Err(Error::CorruptData(format!("Decompressed size exceeded ({})", dec_size)));
+                        return Err(Error::CorruptData(format!(
+                            "Decompressed size exceeded ({})",
+                            dec_size
+                        )));
                     }
                 } else {
-                    return Err(Error::CorruptData(format!("Decompressed size exceeded ({})", dec_size)));
+                    return Err(Error::CorruptData(format!(
+                        "Decompressed size exceeded ({})",
+                        dec_size
+                    )));
                 };
 
                 res.push(r.read_u8()?);
@@ -447,167 +455,227 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
     let mut done = false;
 
     if level == CompressionLevel::Lvl1 {
-        HASHTABLE.with(|hashtable| -> Result<()> {
-        HASHCOUNTER_BIT.with(|hash_counter| -> Result<()> {
-        CACHETABLE.with(|cachetable| -> Result<()> {
+        HASHTABLE
+            .with(|hashtable| -> Result<()> {
+                HASHCOUNTER_BIT.with(|hash_counter| -> Result<()> {
+                    CACHETABLE.with(|cachetable| -> Result<()> {
+                        let mut hashtable = hashtable.borrow_mut();
+                        let mut hash_counter = hash_counter.borrow_mut();
+                        let mut cachetable = cachetable.borrow_mut();
 
-        let mut hashtable = hashtable.borrow_mut();
-        let mut hash_counter = hash_counter.borrow_mut();
-        let mut cachetable = cachetable.borrow_mut();
+                        std::mem::replace(
+                            &mut **hashtable,
+                            [0u32; HASHTABLE_SIZE],
+                        );
+                        hash_counter.clear();
+                        std::mem::replace(
+                            &mut **cachetable,
+                            [0u32; HASHTABLE_SIZE],
+                        );
 
-        std::mem::replace(&mut **hashtable, [0u32; HASHTABLE_SIZE]);
-        hash_counter.clear();
-        std::mem::replace(&mut **cachetable, [0u32; HASHTABLE_SIZE]);
+                        let mut lits: u32 = 0;
 
-        let mut lits: u32 = 0;
+                        while source_pos + 10 < data.len() {
+                            if check_inefficient(
+                                &mut control,
+                                source_pos,
+                                level,
+                                &mut control_pos,
+                                &mut dest,
+                                data,
+                            ) {
+                                done = true;
+                                return Ok(());
+                            }
 
-        while source_pos + 10 < data.len() {
-            if check_inefficient(& mut control, source_pos, level,
-                &mut control_pos, &mut dest, data) {
-                    done = true;
-                    return Ok(());
-            }
+                            let next = read_u24(&data[source_pos..]);
+                            let hash = hash(next);
+                            let hash_i = hash as usize;
+                            let offset = hashtable[hash_i];
+                            let cache = cachetable[hash_i];
+                            let counter = hash_counter[hash_i];
+                            cachetable[hash_i] = next;
+                            hashtable[hash_i] = source_pos as u32;
 
-            let next = read_u24(&data[source_pos..]);
-            let hash = hash(next);
-            let hash_i = hash as usize;
-            let offset = hashtable[hash_i];
-            let cache = cachetable[hash_i];
-            let counter = hash_counter[hash_i];
-            cachetable[hash_i] = next;
-            hashtable[hash_i] = source_pos as u32;
+                            if cache == next
+                                && counter
+                                && (source_pos as u32 - offset >= 3
+                                    || source_pos == (offset + 1) as usize
+                                        && lits >= 3
+                                        && source_pos > 3
+                                        && is_eq(
+                                            &data[source_pos - 3
+                                                ..source_pos + 3],
+                                        ))
+                            {
+                                control = (control >> 1) | (1 << 31);
+                                let mut matchlen = 3;
+                                let remainder =
+                                    cmp::min(data.len() - 4 - source_pos, 0xff);
+                                while data[(offset + matchlen) as usize]
+                                    == data[source_pos + matchlen as usize]
+                                    && (matchlen as usize) < remainder
+                                {
+                                    matchlen += 1;
+                                }
+                                if matchlen < 18 {
+                                    dest.write_u16::<LittleEndian>(
+                                        (hash << 4 | (matchlen - 2)) as u16,
+                                    )
+                                    .unwrap();
+                                } else {
+                                    dest.write_u24::<LittleEndian>(
+                                        (hash << 4 | (matchlen << 16)) as u32,
+                                    )
+                                    .unwrap();
+                                }
+                                source_pos += matchlen as usize;
+                                lits = 0;
+                            } else {
+                                lits += 1;
+                                hash_counter.set(hash_i, true);
 
-            if cache == next && counter
-                && (source_pos as u32 - offset >= 3
-                    || source_pos == (offset + 1) as usize && lits >= 3
-                        && source_pos > 3
-                        && is_eq(&data[source_pos - 3..source_pos + 3]))
-            {
-                control = (control >> 1) | (1 << 31);
-                let mut matchlen = 3;
-                let remainder = cmp::min(data.len() - 4 - source_pos, 0xff);
-                while data[(offset + matchlen) as usize]
-                    == data[source_pos + matchlen as usize]
-                    && (matchlen as usize) < remainder
-                {
-                    matchlen += 1;
-                }
-                if matchlen < 18 {
-                    dest.write_u16::<LittleEndian>(
-                        (hash << 4 | (matchlen - 2)) as u16,
-                    ).unwrap();
-                } else {
-                    dest.write_u24::<LittleEndian>(
-                        (hash << 4 | (matchlen << 16)) as u32,
-                    ).unwrap();
-                }
-                source_pos += matchlen as usize;
-                lits = 0;
-            } else {
-                lits += 1;
-                hash_counter.set(hash_i, true);
-
-                dest.write_u8(data[source_pos]).unwrap();
-                source_pos += 1;
-                control >>= 1;
-            }
-        }
-        Ok(())})?;
-        Ok(())})?;
-        Ok(())}).unwrap();
-
+                                dest.write_u8(data[source_pos]).unwrap();
+                                source_pos += 1;
+                                control >>= 1;
+                            }
+                        }
+                        Ok(())
+                    })?;
+                    Ok(())
+                })?;
+                Ok(())
+            })
+            .unwrap();
     } else if level == CompressionLevel::Lvl3 {
-        HASHTABLE_ARR.with(|hashtable| -> Result<()> {
-        HASHCOUNTER_U8.with(|hash_counter| -> Result<()> {
+        HASHTABLE_ARR
+            .with(|hashtable| -> Result<()> {
+                HASHCOUNTER_U8.with(|hash_counter| -> Result<()> {
+                    let mut hashtable = hashtable.borrow_mut();
+                    let mut hash_counter = hash_counter.borrow_mut();
 
-        let mut hashtable = hashtable.borrow_mut();
-        let mut hash_counter = hash_counter.borrow_mut();
+                    std::mem::replace(
+                        &mut **hashtable,
+                        [[0u32; HASHTABLE_SIZE]; HASHTABLE_COUNT],
+                    );
+                    std::mem::replace(
+                        &mut **hash_counter,
+                        [0u8; HASHTABLE_SIZE],
+                    );
 
-        std::mem::replace(&mut **hashtable, [[0u32; HASHTABLE_SIZE]; HASHTABLE_COUNT]);
-        std::mem::replace(&mut **hash_counter, [0u8; HASHTABLE_SIZE]);
+                    while source_pos + 10 < data.len() {
+                        if check_inefficient(
+                            &mut control,
+                            source_pos,
+                            level,
+                            &mut control_pos,
+                            &mut dest,
+                            data,
+                        ) {
+                            done = true;
+                            return Ok(());
+                        }
 
-        while source_pos + 10 < data.len() {
-            if check_inefficient(& mut control, source_pos, level,
-                &mut control_pos, &mut dest, data) {
-                    done = true;
-                    return Ok(());
-            }
+                        let next = &data[source_pos..source_pos + 3];
+                        let remainder =
+                            cmp::min(data.len() - 4 - source_pos, 0xff);
+                        let hash = hash(read_u24(next)) as usize;
+                        let counter = hash_counter[hash];
+                        let mut matchlen = 0;
+                        let mut offset = 0;
 
-            let next = &data[source_pos..source_pos + 3];
-            let remainder = cmp::min(data.len() - 4 - source_pos, 0xff);
-            let hash = hash(read_u24(next)) as usize;
-            let counter = hash_counter[hash];
-            let mut matchlen = 0;
-            let mut offset = 0;
+                        #[cfg_attr(
+                            feature = "cargo-clippy",
+                            allow(needless_range_loop)
+                        )]
+                        for index in 0..HASHTABLE_COUNT {
+                            if index as u8 >= counter {
+                                break;
+                            }
+                            let hasht = &hashtable[index];
+                            let o = hasht[hash] as usize;
 
-            #[cfg_attr(feature = "cargo-clippy", allow(needless_range_loop))]
-            for index in 0..HASHTABLE_COUNT {
-                if index as u8 >= counter {
-                    break;
-                }
-                let hasht = &hashtable[index];
-                let o = hasht[hash] as usize;
+                            if &data[o..o + 3] == next && o + 2 < source_pos {
+                                let mut m = 3;
+                                while data[o + m] == data[source_pos + m]
+                                    && m < remainder
+                                {
+                                    m += 1;
+                                }
 
-                if &data[o..o + 3] == next && o + 2 < source_pos {
-                    let mut m = 3;
-                    while data[o + m] == data[source_pos + m] && m < remainder {
-                        m += 1;
+                                if m > matchlen || (m == matchlen && o > offset)
+                                {
+                                    offset = o;
+                                    matchlen = m;
+                                }
+                            }
+                        }
+
+                        hashtable[counter as usize % HASHTABLE_COUNT][hash] =
+                            source_pos as u32;
+                        hash_counter[hash] = counter.wrapping_add(1);
+
+                        if matchlen >= 3 && source_pos - offset < 0x1FFFF {
+                            offset = source_pos - offset;
+
+                            #[cfg_attr(
+                                feature = "cargo-clippy",
+                                allow(needless_range_loop)
+                            )]
+                            for u in 1..matchlen {
+                                let hash = crate::hash(read_u24(
+                                    &data[(source_pos + u)..],
+                                ))
+                                    as usize;
+                                let counter = hash_counter[hash];
+                                hash_counter[hash] = counter.wrapping_add(1);
+                                hashtable[counter as usize % HASHTABLE_COUNT]
+                                    [hash] = (source_pos + u) as u32;
+                            }
+
+                            source_pos += matchlen;
+                            control = (control >> 1) | (1 << 31);
+
+                            if matchlen == 3 && offset < (1 << 6) {
+                                dest.write_u8((offset << 2) as u8).unwrap();
+                            } else if matchlen == 3 && offset < (1 << 14) {
+                                dest.write_u16::<LittleEndian>(
+                                    ((offset << 2) | 1) as u16,
+                                )
+                                .unwrap();
+                            } else if (matchlen - 3) < (1 << 4)
+                                && offset < (1 << 12)
+                            {
+                                dest.write_u16::<LittleEndian>(
+                                    ((offset << 6) | ((matchlen - 3) << 2) | 2)
+                                        as u16,
+                                )
+                                .unwrap();
+                            } else if (matchlen - 2) < (1 << 5) {
+                                dest.write_u24::<LittleEndian>(
+                                    ((offset << 7) | ((matchlen - 2) << 2) | 3)
+                                        as u32,
+                                )
+                                .unwrap();
+                            } else {
+                                dest.write_u32::<LittleEndian>(
+                                    ((offset << 15) | ((matchlen - 3) << 7) | 3)
+                                        as u32,
+                                )
+                                .unwrap();
+                            }
+                        } else {
+                            dest.write_u8(data[source_pos]).unwrap();
+                            source_pos += 1;
+                            control >>= 1;
+                        }
                     }
 
-                    if m > matchlen || (m == matchlen && o > offset) {
-                        offset = o;
-                        matchlen = m;
-                    }
-                }
-            }
-
-            hashtable[counter as usize % HASHTABLE_COUNT][hash] =
-                source_pos as u32;
-            hash_counter[hash] = counter.wrapping_add(1);
-
-            if matchlen >= 3 && source_pos - offset < 0x1FFFF {
-                offset = source_pos - offset;
-
-                #[cfg_attr(feature = "cargo-clippy",
-                           allow(needless_range_loop))]
-                for u in 1..matchlen {
-                    let hash =
-                        ::hash(read_u24(&data[(source_pos + u)..])) as usize;
-                    let counter = hash_counter[hash];
-                    hash_counter[hash] = counter.wrapping_add(1);
-                    hashtable[counter as usize % HASHTABLE_COUNT][hash] = (source_pos + u) as u32;
-                }
-
-                source_pos += matchlen;
-                control = (control >> 1) | (1 << 31);
-
-                if matchlen == 3 && offset < (1 << 6) {
-                    dest.write_u8((offset << 2) as u8).unwrap();
-                } else if matchlen == 3 && offset < (1 << 14) {
-                    dest.write_u16::<LittleEndian>(((offset << 2) | 1) as u16)
-                        .unwrap();
-                } else if (matchlen - 3) < (1 << 4) && offset < (1 << 12) {
-                    dest.write_u16::<LittleEndian>(
-                        ((offset << 6) | ((matchlen - 3) << 2) | 2) as u16,
-                    ).unwrap();
-                } else if (matchlen - 2) < (1 << 5) {
-                    dest.write_u24::<LittleEndian>(
-                        ((offset << 7) | ((matchlen - 2) << 2) | 3) as u32,
-                    ).unwrap();
-                } else {
-                    dest.write_u32::<LittleEndian>(
-                        ((offset << 15) | ((matchlen - 3) << 7) | 3) as u32,
-                    ).unwrap();
-                }
-            } else {
-                dest.write_u8(data[source_pos]).unwrap();
-                source_pos += 1;
-                control >>= 1;
-            }
-        }
-
-        Ok(())})?;
-        Ok(())}).unwrap();
+                    Ok(())
+                })?;
+                Ok(())
+            })
+            .unwrap();
     }
 
     if done {
@@ -633,8 +701,14 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
     write_control(&mut dest, control_pos, (control >> 1) | (1 << 31)).unwrap();
 
     let dest_len = dest.len();
-    write_header(&mut dest[0..(headerlen as usize)], dest_len, data.len(),
-        level.as_u8(), true).unwrap();
+    write_header(
+        &mut dest[0..(headerlen as usize)],
+        dest_len,
+        data.len(),
+        level.as_u8(),
+        true,
+    )
+    .unwrap();
     dest
 }
 
@@ -642,9 +716,14 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
 // inline gives about 15%-20% performance boost since this method is used
 // at a hot point of the compression method.
 #[inline(always)]
-fn check_inefficient(control: &mut u32, source_pos: usize,
-    level: CompressionLevel, control_pos: &mut usize, dest: &mut Vec<u8>,
-    data: &[u8]) -> bool {
+fn check_inefficient(
+    control: &mut u32,
+    source_pos: usize,
+    level: CompressionLevel,
+    control_pos: &mut usize,
+    dest: &mut Vec<u8>,
+    data: &[u8],
+) -> bool {
     if *control & 1 != 0 {
         if source_pos > 3 * (data.len() / 4)
             && dest.len() > source_pos - (source_pos / 32)
@@ -665,7 +744,8 @@ fn check_inefficient(control: &mut u32, source_pos: usize,
                 data.len(),
                 level.as_u8(),
                 false,
-            ).unwrap();
+            )
+            .unwrap();
             return true;
         }
         write_control(dest, *control_pos, (*control >> 1) | (1 << 31)).unwrap();
@@ -678,6 +758,7 @@ fn check_inefficient(control: &mut u32, source_pos: usize,
 
 #[cfg(test)]
 mod tests {
+    use super::{compress, decompress, CompressionLevel};
     use std::io::Cursor;
     use std::iter;
 
@@ -691,7 +772,7 @@ mod tests {
         let orig: Vec<u8> = (0..10).collect();
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(&orig, &dec);
     }
 
@@ -717,7 +798,7 @@ mod tests {
         let orig: Vec<u8> = (0..0x80).collect();
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(&orig, &dec);
     }
 
@@ -734,7 +815,7 @@ mod tests {
             .collect();
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(&orig, &dec);
     }
 
@@ -798,7 +879,7 @@ mod tests {
         let orig = b"initserver virtualserver_name=Server\\sder\\sVerplanten virtualserver_welcomemessage=This\\sis\\sSplamys\\sWorld virtualserver_platform=Linux virtualserver_version=3.0.13.8\\s[Build:\\s1500452811] virtualserver_maxclients=32 virtualserver_created=0 virtualserver_codec_encryption_mode=1 virtualserver_hostmessage=L\xc3\xa9\\sServer\\sde\\sSplamy virtualserver_hostmessage_mode=0 virtualserver_default_server_group=8 virtualserver_default_channel_group=8 virtualserver_hostbanner_url virtualserver_hostbanner_gfx_url virtualserver_hostbanner_gfx_interval=2000 virtualserver_priority_speaker_dimm_modificator=-18.0000 virtualserver_id=1 virtualserver_hostbutton_tooltip virtualserver_hostbutton_url virtualserver_hostbutton_gfx_url virtualserver_name_phonetic=mob virtualserver_icon_id=2568555213 virtualserver_ip=0.0.0.0,\\s:: virtualserver_ask_for_privilegekey=0 virtualserver_hostbanner_mode=0 virtualserver_channel_temp_delete_delay_default=10 acn=ItsMe aclid=1 pv=6 lt=0 client_talk_power=-1 client_needed_serverquery_view_power=75";
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(orig.as_ref(), dec.as_slice());
     }
 
@@ -862,7 +943,7 @@ mod tests {
         let orig = b"initserver virtualserver_name=Server\\sder\\sVerplanten virtualserver_welcomemessage=This\\sis\\sSplamys\\sWorld virtualserver_platform=Linux virtualserver_version=3.0.13.8\\s[Build:\\s1500452811] virtualserver_maxclients=32 virtualserver_created=0 virtualserver_codec_encryption_mode=1 virtualserver_hostmessage=L\xc3\xa9\\sServer\\sde\\sSplamy virtualserver_hostmessage_mode=0 virtualserver_default_server_group=8 virtualserver_default_channel_group=8 virtualserver_hostbanner_url virtualserver_hostbanner_gfx_url virtualserver_hostbanner_gfx_interval=2000 virtualserver_priority_speaker_dimm_modificator=-18.0000 virtualserver_id=1 virtualserver_hostbutton_tooltip virtualserver_hostbutton_url virtualserver_hostbutton_gfx_url virtualserver_name_phonetic=mob virtualserver_icon_id=2568555213 virtualserver_ip=0.0.0.0,\\s:: virtualserver_ask_for_privilegekey=0 virtualserver_hostbanner_mode=0 virtualserver_channel_temp_delete_delay_default=10 acn=ItsMe aclid=1 pv=6 lt=0 client_talk_power=-1 client_needed_serverquery_view_power=75";
 
         let input = orig.to_vec();
-        let com = ::compress(&input, ::CompressionLevel::Lvl1);
+        let com = compress(&input, CompressionLevel::Lvl1);
         assert_eq!(data.as_ref(), com.as_slice());
     }
 
@@ -928,7 +1009,7 @@ mod tests {
         let orig = b"initserver virtualserver_name=Server\\sder\\sVerplanten virtualserver_welcomemessage=This\\sis\\sSplamys\\sWorld virtualserver_platform=Linux virtualserver_version=3.0.13.8\\s[Build:\\s1500452811] virtualserver_maxclients=32 virtualserver_created=0 virtualserver_nodec_encryption_mode=1 virtualserver_hostmessage=L\xc3\xa9\\sServer\\sde\\sSplamy virtualserver_name=Server_mode=0 virtualserver_default_server group=8 virtualserver_default_channel_group=8 virtualserver_hostbanner_url virtualserver_hostmessagegfx_url virtualserver_hostmessagegfx_interval=2000 virtualserver_priority_speaker_dimm_modificator=-18.0000 virtualserver_id=1 virtualserver_hostbutton_tooltip virtualserver_name=utton_url virtualserver_hostmutton_gfx_url virtualserver_name_phonetic=mob virtualserver_icon_id=2568555213 virtualserver_np=0.0.0.0,\\s:: virtualserver_ask_for_privilegekey=0 virtualserver_hostmessagemode=0 virtualserver_channel_temp_delete_delay_default=10 acn=ItsMe aclid=1 pv=6 lt=0 clid=1_talk_power=-1 clid=1_needed_serverquery_view_power=75";
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(orig.as_ref(), dec.as_slice());
     }
 
@@ -984,7 +1065,7 @@ mod tests {
         let orig = b"notifycliententerview cfid=0 ctid=1 reasonid=2 clid=1 client_unique_identifier=lks7QL5OVMKo4pZ79cEOI5r5oEA= client_nickname=Bot client_input_muted=0 client_output_muted=0 client_outputonly_muted=0 client_input_hardware=0 client_output_hardware=0 client_meta_data client_is_recording=0 client_database_id=239 client_channel_group_id=8 client_servergroups=7 client_away=0 client_away_message client_type=0 client_flag_avatar client_talk_power=50 client_talk_request=0 client_talk_request_msg client_description client_is_talker=0 client_is_priority_speaker=0 client_unread_messages=0 client_nickname_phonetic client_needed_serverquery_view_power=75 client_icon_id=0 client_is_channel_commander=0 client_country client_channel_group_inherited_channel_id=1 client_badges";
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(orig.as_ref(), dec.as_slice());
     }
 
@@ -992,9 +1073,9 @@ mod tests {
     fn roundtrip_lvl1() {
         let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
 
-        let comp = ::compress(orig, ::CompressionLevel::Lvl1);
+        let comp = compress(orig, CompressionLevel::Lvl1);
         let mut r = Cursor::new(comp.as_slice());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
 
         assert_eq!(orig.as_ref(), dec.as_slice());
     }
@@ -1003,9 +1084,9 @@ mod tests {
     fn roundtrip_lvl3() {
         let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
 
-        let comp = ::compress(orig, ::CompressionLevel::Lvl3);
+        let comp = compress(orig, CompressionLevel::Lvl3);
         let mut r = Cursor::new(comp.as_slice());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
 
         assert_eq!(orig.as_ref(), dec.as_slice());
     }
@@ -1023,7 +1104,7 @@ mod tests {
         let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
 
         let input = orig.to_vec();
-        let com = ::compress(&input, ::CompressionLevel::Lvl3);
+        let com = compress(&input, CompressionLevel::Lvl3);
         let comsl = com.as_slice();
         if comsl[0] & 2 != 0 {
             // long
@@ -1038,8 +1119,8 @@ mod tests {
 #[cfg(feature = "nightly")]
 mod bench {
     use super::*;
-    use test::Bencher;
     use std::fs::File;
+    use test::Bencher;
 
     #[bench]
     fn perf_compress_lvl1(b: &mut Bencher) {
