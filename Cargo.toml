@@ -18,6 +18,7 @@ include = [
     "README.md",
     "Cargo.toml"
 ]
+edition = "2018"
 
 [badges]
 travis-ci = { repository = "ReSpeak/quicklz" }
@@ -29,7 +30,7 @@ path = "src/lib.rs"
 [dependencies]
 bit-vec = "0.5"
 byteorder = "1"
-failure = "0.1"
+thiserror = "1.0"
 
 [features]
 nightly = []

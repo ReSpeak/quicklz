@@ -7,13 +7,10 @@
 
 #![cfg_attr(feature = "nightly", feature(test))]
 
-extern crate byteorder;
-extern crate bit_vec;
-#[macro_use]
-extern crate failure;
 #[cfg(feature = "nightly")]
 extern crate test;
 
+use thiserror::Error;
 use std::cell::RefCell;
 use std::cmp;
 use std::io::{Read, Write};
@@ -41,30 +38,25 @@ thread_local! {
         = RefCell::new(BitVec::from_elem(HASHTABLE_SIZE, false));
 }
 
-#[derive(Fail, Debug)]
+#[derive(Error, Debug)]
 pub enum Error {
-    #[fail(display = "{}", _0)]
-    Io(#[cause] std::io::Error),
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
     /// This library supports only level 1 and 3 if another level is detected,
     /// this error will be returned.
-    #[fail(display = "Unsupported QuickLZ level, this library only supports \
+    #[error("Unsupported QuickLZ level, this library only supports \
         level 1 and 3")]
     UnsupportedLevel,
     /// If the given maximum decompressed size is exceeded, this error will be
     /// returned.
-    #[fail(display = "Maximum uncompressed size exceeded: {}/{}", dec, max)]
+    #[error("Maximum uncompressed size exceeded: {}/{}", dec, max)]
     SizeLimitExceeded { dec: u32, max: u32 },
     /// If the compressed data cannot be decompressed, this error will be
     /// returned, containing a short description.
-    #[fail(display = "{}", _0)]
+    #[error("{0}")]
     CorruptData(String),
 }
 
-impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Self {
-        Error::Io(e)
-    }
-}
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum CompressionLevel {
@@ -165,7 +157,7 @@ fn read_u24(inp: &[u8]) -> u32 {
 /// if data would be larger.
 ///
 /// If the incoming data are compressed using level 2, an error is returned.
-pub fn decompress(r: &mut Read, max_size: u32) -> Result<Vec<u8>> {
+pub fn decompress(r: &mut dyn Read, max_size: u32) -> Result<Vec<u8>> {
     let mut res = Vec::new();
     let mut control: u32 = 1;
 
@@ -572,7 +564,7 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
                            allow(needless_range_loop))]
                 for u in 1..matchlen {
                     let hash =
-                        ::hash(read_u24(&data[(source_pos + u)..])) as usize;
+                        crate::hash(read_u24(&data[(source_pos + u)..])) as usize;
                     let counter = hash_counter[hash];
                     hash_counter[hash] = counter.wrapping_add(1);
                     hashtable[counter as usize % HASHTABLE_COUNT][hash] = (source_pos + u) as u32;
@@ -680,6 +672,7 @@ fn check_inefficient(control: &mut u32, source_pos: usize,
 mod tests {
     use std::io::Cursor;
     use std::iter;
+    use super::*;
 
     #[test]
     fn continuous10() {
@@ -691,7 +684,7 @@ mod tests {
         let orig: Vec<u8> = (0..10).collect();
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(&orig, &dec);
     }
 
@@ -717,7 +710,7 @@ mod tests {
         let orig: Vec<u8> = (0..0x80).collect();
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(&orig, &dec);
     }
 
@@ -734,7 +727,7 @@ mod tests {
             .collect();
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(&orig, &dec);
     }
 
@@ -798,7 +791,7 @@ mod tests {
         let orig = b"initserver virtualserver_name=Server\\sder\\sVerplanten virtualserver_welcomemessage=This\\sis\\sSplamys\\sWorld virtualserver_platform=Linux virtualserver_version=3.0.13.8\\s[Build:\\s1500452811] virtualserver_maxclients=32 virtualserver_created=0 virtualserver_codec_encryption_mode=1 virtualserver_hostmessage=L\xc3\xa9\\sServer\\sde\\sSplamy virtualserver_hostmessage_mode=0 virtualserver_default_server_group=8 virtualserver_default_channel_group=8 virtualserver_hostbanner_url virtualserver_hostbanner_gfx_url virtualserver_hostbanner_gfx_interval=2000 virtualserver_priority_speaker_dimm_modificator=-18.0000 virtualserver_id=1 virtualserver_hostbutton_tooltip virtualserver_hostbutton_url virtualserver_hostbutton_gfx_url virtualserver_name_phonetic=mob virtualserver_icon_id=2568555213 virtualserver_ip=0.0.0.0,\\s:: virtualserver_ask_for_privilegekey=0 virtualserver_hostbanner_mode=0 virtualserver_channel_temp_delete_delay_default=10 acn=ItsMe aclid=1 pv=6 lt=0 client_talk_power=-1 client_needed_serverquery_view_power=75";
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(orig.as_ref(), dec.as_slice());
     }
 
@@ -862,7 +855,7 @@ mod tests {
         let orig = b"initserver virtualserver_name=Server\\sder\\sVerplanten virtualserver_welcomemessage=This\\sis\\sSplamys\\sWorld virtualserver_platform=Linux virtualserver_version=3.0.13.8\\s[Build:\\s1500452811] virtualserver_maxclients=32 virtualserver_created=0 virtualserver_codec_encryption_mode=1 virtualserver_hostmessage=L\xc3\xa9\\sServer\\sde\\sSplamy virtualserver_hostmessage_mode=0 virtualserver_default_server_group=8 virtualserver_default_channel_group=8 virtualserver_hostbanner_url virtualserver_hostbanner_gfx_url virtualserver_hostbanner_gfx_interval=2000 virtualserver_priority_speaker_dimm_modificator=-18.0000 virtualserver_id=1 virtualserver_hostbutton_tooltip virtualserver_hostbutton_url virtualserver_hostbutton_gfx_url virtualserver_name_phonetic=mob virtualserver_icon_id=2568555213 virtualserver_ip=0.0.0.0,\\s:: virtualserver_ask_for_privilegekey=0 virtualserver_hostbanner_mode=0 virtualserver_channel_temp_delete_delay_default=10 acn=ItsMe aclid=1 pv=6 lt=0 client_talk_power=-1 client_needed_serverquery_view_power=75";
 
         let input = orig.to_vec();
-        let com = ::compress(&input, ::CompressionLevel::Lvl1);
+        let com = compress(&input, CompressionLevel::Lvl1);
         assert_eq!(data.as_ref(), com.as_slice());
     }
 
@@ -928,7 +921,7 @@ mod tests {
         let orig = b"initserver virtualserver_name=Server\\sder\\sVerplanten virtualserver_welcomemessage=This\\sis\\sSplamys\\sWorld virtualserver_platform=Linux virtualserver_version=3.0.13.8\\s[Build:\\s1500452811] virtualserver_maxclients=32 virtualserver_created=0 virtualserver_nodec_encryption_mode=1 virtualserver_hostmessage=L\xc3\xa9\\sServer\\sde\\sSplamy virtualserver_name=Server_mode=0 virtualserver_default_server group=8 virtualserver_default_channel_group=8 virtualserver_hostbanner_url virtualserver_hostmessagegfx_url virtualserver_hostmessagegfx_interval=2000 virtualserver_priority_speaker_dimm_modificator=-18.0000 virtualserver_id=1 virtualserver_hostbutton_tooltip virtualserver_name=utton_url virtualserver_hostmutton_gfx_url virtualserver_name_phonetic=mob virtualserver_icon_id=2568555213 virtualserver_np=0.0.0.0,\\s:: virtualserver_ask_for_privilegekey=0 virtualserver_hostmessagemode=0 virtualserver_channel_temp_delete_delay_default=10 acn=ItsMe aclid=1 pv=6 lt=0 clid=1_talk_power=-1 clid=1_needed_serverquery_view_power=75";
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(orig.as_ref(), dec.as_slice());
     }
 
@@ -984,7 +977,7 @@ mod tests {
         let orig = b"notifycliententerview cfid=0 ctid=1 reasonid=2 clid=1 client_unique_identifier=lks7QL5OVMKo4pZ79cEOI5r5oEA= client_nickname=Bot client_input_muted=0 client_output_muted=0 client_outputonly_muted=0 client_input_hardware=0 client_output_hardware=0 client_meta_data client_is_recording=0 client_database_id=239 client_channel_group_id=8 client_servergroups=7 client_away=0 client_away_message client_type=0 client_flag_avatar client_talk_power=50 client_talk_request=0 client_talk_request_msg client_description client_is_talker=0 client_is_priority_speaker=0 client_unread_messages=0 client_nickname_phonetic client_needed_serverquery_view_power=75 client_icon_id=0 client_is_channel_commander=0 client_country client_channel_group_inherited_channel_id=1 client_badges";
 
         let mut r = Cursor::new(data.as_ref());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
         assert_eq!(orig.as_ref(), dec.as_slice());
     }
 
@@ -992,9 +985,9 @@ mod tests {
     fn roundtrip_lvl1() {
         let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
 
-        let comp = ::compress(orig, ::CompressionLevel::Lvl1);
+        let comp = compress(orig, CompressionLevel::Lvl1);
         let mut r = Cursor::new(comp.as_slice());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
 
         assert_eq!(orig.as_ref(), dec.as_slice());
     }
@@ -1003,9 +996,9 @@ mod tests {
     fn roundtrip_lvl3() {
         let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
 
-        let comp = ::compress(orig, ::CompressionLevel::Lvl3);
+        let comp = compress(orig, CompressionLevel::Lvl3);
         let mut r = Cursor::new(comp.as_slice());
-        let dec = ::decompress(&mut r, 1024).unwrap();
+        let dec = decompress(&mut r, 1024).unwrap();
 
         assert_eq!(orig.as_ref(), dec.as_slice());
     }
@@ -1023,7 +1016,7 @@ mod tests {
         let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
 
         let input = orig.to_vec();
-        let com = ::compress(&input, ::CompressionLevel::Lvl3);
+        let com = compress(&input, CompressionLevel::Lvl3);
         let comsl = com.as_slice();
         if comsl[0] & 2 != 0 {
             // long
@@ -1040,6 +1033,7 @@ mod bench {
     use super::*;
     use test::Bencher;
     use std::fs::File;
+    use super::*;
 
     #[bench]
     fn perf_compress_lvl1(b: &mut Bencher) {
@@ -1050,7 +1044,7 @@ mod bench {
             .expect("something went wrong reading the file");
 
         b.iter(|| {
-            ::compress(contents.as_slice(), ::CompressionLevel::Lvl1);
+            compress(contents.as_slice(), CompressionLevel::Lvl1);
         });
     }
 
@@ -1063,7 +1057,7 @@ mod bench {
             .expect("something went wrong reading the file");
 
         b.iter(|| {
-            ::compress(contents.as_slice(), ::CompressionLevel::Lvl3);
+            compress(contents.as_slice(), CompressionLevel::Lvl3);
         });
     }
 }
