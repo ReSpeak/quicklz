@@ -203,7 +203,7 @@ pub fn decompress(r: &mut dyn Read, max_size: u32) -> Result<Vec<u8>> {
 
     HASHTABLE.with(|tab| -> Result<()> {
         let mut tab = tab.borrow_mut();
-        std::mem::replace(&mut **tab, [0u32; HASHTABLE_SIZE]);
+        **tab = [0u32; HASHTABLE_SIZE];
 
         let mut state = if level == 1 {
             DecompressState::Level1(0, &mut tab)
@@ -447,9 +447,9 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
         let mut hash_counter = hash_counter.borrow_mut();
         let mut cachetable = cachetable.borrow_mut();
 
-        std::mem::replace(&mut **hashtable, [0u32; HASHTABLE_SIZE]);
+        **hashtable = [0u32; HASHTABLE_SIZE];
         hash_counter.clear();
-        std::mem::replace(&mut **cachetable, [0u32; HASHTABLE_SIZE]);
+        **cachetable = [0u32; HASHTABLE_SIZE];
 
         let mut lits: u32 = 0;
 
@@ -515,8 +515,8 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
         let mut hashtable = hashtable.borrow_mut();
         let mut hash_counter = hash_counter.borrow_mut();
 
-        std::mem::replace(&mut **hashtable, [[0u32; HASHTABLE_SIZE]; HASHTABLE_COUNT]);
-        std::mem::replace(&mut **hash_counter, [0u8; HASHTABLE_SIZE]);
+        **hashtable = [[0u32; HASHTABLE_SIZE]; HASHTABLE_COUNT];
+        **hash_counter = [0u8; HASHTABLE_SIZE];
 
         while source_pos + 10 < data.len() {
             if check_inefficient(& mut control, source_pos, level,
