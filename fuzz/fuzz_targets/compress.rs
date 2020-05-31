@@ -5,7 +5,6 @@ extern crate quicklz;
 use std::io::Cursor;
 
 use quicklz::*;
-use quicklz::errors::*;
 
 fuzz_target!(|data: &[u8]| {
     let res = test(data);
@@ -15,7 +14,7 @@ fuzz_target!(|data: &[u8]| {
     res.unwrap();
 });
 
-fn test(data: &[u8]) -> Result<()> {
+fn test(data: &[u8]) -> Result<(), Error> {
     // Compress data
     let lvl1 = compress(data, CompressionLevel::Lvl1);
     let lvl3 = compress(data, CompressionLevel::Lvl3);

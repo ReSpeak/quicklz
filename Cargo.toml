@@ -7,7 +7,6 @@ QuickLZ is a fast compression algorithm.
 This library is an implementation of the QuickLZ format in rust.
 """
 repository = "https://github.com/ReSpeak/quicklz"
-documentation = "https://docs.rs/quicklz"
 readme = "README.md"
 keywords = ["quicklz"]
 categories = ["compression"]
@@ -20,15 +19,12 @@ include = [
 ]
 edition = "2018"
 
-[badges]
-travis-ci = { repository = "ReSpeak/quicklz" }
-
 [lib]
 name = "quicklz"
 path = "src/lib.rs"
 
 [dependencies]
-bit-vec = "0.5"
+bit-vec = "0.6"
 byteorder = "1"
 thiserror = "1.0"
 

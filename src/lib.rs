@@ -189,8 +189,8 @@ pub fn decompress(r: &mut dyn Read, max_size: u32) -> Result<Vec<u8>> {
     }
     if comp_size < header_len {
         return Err(Error::CorruptData(format!(
-            "Invalid compressed size: {}",
-            comp_size
+            "Invalid compressed size: {} < {}",
+            comp_size, header_len
         )));
     }
     res.reserve(dec_size as usize);
@@ -716,7 +716,7 @@ fn check_inefficient(
         if source_pos > 3 * (data.len() / 4)
             && dest.len() > source_pos - (source_pos / 32)
         {
-            let headerlen = if data.len() > 255 { 9 } else { 3 };
+            let headerlen = if data.len() < 216 { 3 } else { 9 };
             dest.clear();
             // To prevent a double allocation we reserve the exact size needed
             // for the header and data.
@@ -1101,6 +1101,33 @@ mod tests {
             // short
             assert_eq!(data_s.as_ref(), com.as_slice());
         }
+    }
+
+    #[test]
+    fn fuzz_compress_crash() {
+        let data = [
+            8, 255, 100, 242, 242, 242, 159, 159, 4, 0, 0, 197, 159, 61, 255,
+            1, 0, 0, 255, 2, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 7, 0,
+            0, 0, 0, 0, 0, 0, 32, 0, 0, 248, 104, 0, 255, 255, 0, 0, 255, 0, 1,
+            2, 2, 253, 253, 253, 110, 0, 0, 0, 255, 64, 255, 222, 222, 222,
+            222, 0, 255, 255, 255, 0, 213, 219, 219, 219, 219, 219, 255, 255,
+            249, 64, 64, 100, 100, 100, 100, 100, 50, 242, 242, 0, 242, 64,
+            159, 255, 159, 159, 255, 145, 1, 0, 4, 255, 1, 145, 180, 155, 180,
+            155, 255, 255, 246, 249, 255, 255, 255, 0, 0, 16, 0, 255, 46, 255,
+            0, 255, 253, 182, 0, 0, 0, 5, 219, 219, 219, 219, 219, 255, 255,
+            104, 255, 255, 0, 0, 0, 22, 0, 39, 7, 243, 255, 0, 255, 0, 255,
+            255, 255, 0, 0, 0, 0, 128, 0, 0, 0, 0, 104, 104, 104, 104, 104,
+            192, 248, 0, 0, 0, 255, 65, 0, 76, 255, 255, 4, 255, 249, 255, 255,
+            2, 0, 0, 0, 255, 255, 0, 255, 255, 255, 255, 255, 255, 255, 42, 75,
+            255, 255, 0, 255, 127, 255, 255, 0, 0, 0, 0, 0, 0, 255, 255, 255,
+            255, 255, 255, 110, 0, 0, 0, 0, 0, 255, 255, 255, 42, 75, 255, 255,
+            0, 255, 255, 110, 0, 0, 0, 9, 255, 255, 0, 0, 0, 0, 0,
+        ];
+        let lvl1 = compress(&data[..], CompressionLevel::Lvl1);
+        println!("{:x?}", lvl1);
+        let dec1 =
+            decompress(&mut Cursor::new(lvl1), data.len() as u32).unwrap();
+        assert_eq!(&data[..], dec1.as_slice());
     }
 }
 

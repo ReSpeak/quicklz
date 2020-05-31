@@ -25,7 +25,7 @@ Used if the data size is less than 216.
 
 ```
 ┌─────╥───────────╥───────────┐
-│Flags║ Comp size ║ Dec sizc  │
+│Flags║ Comp size ║ Dec size  │
 └─────╨───────────╨───────────┘
 ```
 
