@@ -304,7 +304,8 @@ pub fn decompress(r: &mut dyn Read, max_size: u32) -> Result<Vec<u8>> {
                             let next4 = u32::from(r.read_u8()?);
                             matchlen =
                                 3 + ((next >> 7) | ((next2 & 0x7f) << 1));
-                            offset = (next2 >> 7) | (next3 << 1) | (next4 << 1);
+                            offset = (next2 >> 7) | (next3 << 1) | (next4 << 9);
+                            println!("offset: {offset}");
                         } else {
                             matchlen = 2 + ((next >> 2) & 0x1f);
                             offset = (next >> 7)
@@ -632,7 +633,7 @@ pub fn compress(data: &[u8], level: CompressionLevel) -> Vec<u8> {
                                 )
                                 .unwrap();
                             } else if (matchlen - 3) < (1 << 4)
-                                && offset < (1 << 12)
+                                && offset < (1 << 10)
                             {
                                 dest.write_u16::<LittleEndian>(
                                     ((offset << 6) | ((matchlen - 3) << 2) | 2)
@@ -868,7 +869,7 @@ mod tests {
 
         let mut r = Cursor::new(data.as_ref());
         let dec = decompress(&mut r, 1024).unwrap();
-        assert_eq!(orig.as_ref(), dec.as_slice());
+        assert_eq!(orig.as_ref(), &dec);
     }
 
     #[test]
@@ -932,7 +933,7 @@ mod tests {
 
         let input = orig.to_vec();
         let com = compress(&input, CompressionLevel::Lvl1);
-        assert_eq!(data.as_ref(), com.as_slice());
+        assert_eq!(data.as_ref(), &com);
     }
 
     #[test]
@@ -998,7 +999,7 @@ mod tests {
 
         let mut r = Cursor::new(data.as_ref());
         let dec = decompress(&mut r, 1024).unwrap();
-        assert_eq!(orig.as_ref(), dec.as_slice());
+        assert_eq!(orig.as_ref(), &dec);
     }
 
     #[test]
@@ -1054,7 +1055,7 @@ mod tests {
 
         let mut r = Cursor::new(data.as_ref());
         let dec = decompress(&mut r, 1024).unwrap();
-        assert_eq!(orig.as_ref(), dec.as_slice());
+        assert_eq!(orig.as_ref(), &dec);
     }
 
     #[test]
@@ -1065,7 +1066,7 @@ mod tests {
         let mut r = Cursor::new(comp.as_slice());
         let dec = decompress(&mut r, 1024).unwrap();
 
-        assert_eq!(orig.as_ref(), dec.as_slice());
+        assert_eq!(orig.as_ref(), &dec);
     }
 
     #[test]
@@ -1076,7 +1077,7 @@ mod tests {
         let mut r = Cursor::new(comp.as_slice());
         let dec = decompress(&mut r, 1024).unwrap();
 
-        assert_eq!(orig.as_ref(), dec.as_slice());
+        assert_eq!(orig.as_ref(), &dec);
     }
 
     #[test]
@@ -1091,16 +1092,65 @@ mod tests {
         ];
         let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
 
-        let input = orig.to_vec();
-        let com = compress(&input, CompressionLevel::Lvl3);
+        let com = compress(orig, CompressionLevel::Lvl3);
         let comsl = com.as_slice();
         if comsl[0] & 2 != 0 {
             // long
-            assert_eq!(data_l.as_ref(), com.as_slice());
+            assert_eq!(data_l, comsl);
         } else {
             // short
-            assert_eq!(data_s.as_ref(), com.as_slice());
+            assert_eq!(data_s, comsl);
         }
+    }
+
+    #[test]
+    fn data_compress_lvl3_fail() {
+        let data_s = [
+            77, 26, 106, 136, 1, 0, 128, 97, 97, 97, 131, 154, 1, 0, 98, 98,
+        ];
+        let data_compressed = [
+            79, 82, 0, 0, 0, 32, 8, 0, 0, 0, 0, 168, 170, 77, 26, 106, 136, 1,
+            0, 128, 97, 97, 97, 131, 154, 1, 0, 98, 98, 0, 0, 0, 3, 254, 1, 0,
+            0, 3, 254, 1, 0, 0, 3, 254, 1, 0, 0, 3, 254, 1, 0, 0, 3, 254, 1, 0,
+            0, 3, 254, 1, 0, 0, 13, 0, 0, 128, 3, 254, 1, 0, 0, 3, 253, 1, 0,
+            43, 8, 4, 1, 0, 98, 98,
+        ];
+        let mut data = Vec::new();
+        data.extend_from_slice(&data_s);
+        for _ in 0..(1 << 11) {
+            data.push(0);
+        }
+        data.extend_from_slice(&data_s);
+
+        let com = compress(&data, CompressionLevel::Lvl3);
+        assert_eq!(&data_compressed, com.as_slice());
+        let dec =
+            decompress(&mut Cursor::new(com.as_slice()), data.len() as u32)
+                .unwrap();
+        assert_eq!(&data, &dec);
+    }
+
+    #[test]
+    fn data_decompress_lvl3_fail() {
+        let mut data = Vec::new();
+        for i in 0..(1 << 6) {
+            data.push(255 - i);
+        }
+
+        for i in 0u32..(1 << 11) {
+            data.push(i as u8);
+        }
+
+        // Second block to compress
+        for i in 0..(1 << 6) {
+            data.push(255 - i);
+        }
+
+        let com = compress(&data, CompressionLevel::Lvl3);
+        let dec =
+            decompress(&mut Cursor::new(com.as_slice()), data.len() as u32)
+                .unwrap();
+        assert_eq!(&data, &dec);
     }
 
     #[test]
