@@ -305,7 +305,6 @@ pub fn decompress(r: &mut dyn Read, max_size: u32) -> Result<Vec<u8>> {
                             matchlen =
                                 3 + ((next >> 7) | ((next2 & 0x7f) << 1));
                             offset = (next2 >> 7) | (next3 << 1) | (next4 << 9);
-                            println!("offset: {offset}");
                         } else {
                             matchlen = 2 + ((next >> 2) & 0x1f);
                             offset = (next >> 7)
@@ -1174,7 +1173,6 @@ mod tests {
             0, 255, 255, 110, 0, 0, 0, 9, 255, 255, 0, 0, 0, 0, 0,
         ];
         let lvl1 = compress(&data[..], CompressionLevel::Lvl1);
-        println!("{:x?}", lvl1);
         let dec1 =
             decompress(&mut Cursor::new(lvl1), data.len() as u32).unwrap();
         assert_eq!(&data[..], dec1.as_slice());
