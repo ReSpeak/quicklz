@@ -750,6 +750,14 @@ mod tests {
     use std::io::Cursor;
     use std::iter;
 
+    fn roundtrip_lvl3(data: &[u8]) {
+        let comp = compress(data, CompressionLevel::Lvl3);
+        let mut r = Cursor::new(comp.as_slice());
+        let dec = decompress(&mut r, 1000000).unwrap();
+
+        assert_eq!(data, &dec);
+    }
+
     #[test]
     fn continuous10() {
         let data = [
@@ -1069,14 +1077,8 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_lvl3() {
-        let orig = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa";
-
-        let comp = compress(orig, CompressionLevel::Lvl3);
-        let mut r = Cursor::new(comp.as_slice());
-        let dec = decompress(&mut r, 1024).unwrap();
-
-        assert_eq!(orig.as_ref(), &dec);
+    fn simple_roundtrip_lvl3() {
+        roundtrip_lvl3(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbaaaaaaaaaaaaaaaaa");
     }
 
     #[test]
@@ -1103,34 +1105,107 @@ mod tests {
     }
 
     #[test]
-    fn data_compress_lvl3_fail() {
-        let data_s = [
-            77, 26, 106, 136, 1, 0, 128, 97, 97, 97, 131, 154, 1, 0, 98, 98,
-        ];
-        let data_compressed = [
-            79, 82, 0, 0, 0, 32, 8, 0, 0, 0, 0, 168, 170, 77, 26, 106, 136, 1,
-            0, 128, 97, 97, 97, 131, 154, 1, 0, 98, 98, 0, 0, 0, 3, 254, 1, 0,
-            0, 3, 254, 1, 0, 0, 3, 254, 1, 0, 0, 3, 254, 1, 0, 0, 3, 254, 1, 0,
-            0, 3, 254, 1, 0, 0, 13, 0, 0, 128, 3, 254, 1, 0, 0, 3, 253, 1, 0,
-            43, 8, 4, 1, 0, 98, 98,
-        ];
+    fn lvl3_case0() {
         let mut data = Vec::new();
-        data.extend_from_slice(&data_s);
-        for _ in 0..(1 << 11) {
-            data.push(0);
+        // Incompressible
+        for i in 0..255 {
+            data.push(255 - i);
         }
-        data.extend_from_slice(&data_s);
+        for i in 0..255 {
+            data.push(i);
+        }
+        for i in 0..(255 / 2) {
+            data.push((255 - i) << 1);
+        }
+        for i in 0..(255 / 2) {
+            data.push(i << 1);
+        }
 
-        let com = compress(&data, CompressionLevel::Lvl3);
-        assert_eq!(&data_compressed, com.as_slice());
-        let dec =
-            decompress(&mut Cursor::new(com.as_slice()), data.len() as u32)
-                .unwrap();
-        assert_eq!(&data, &dec);
+        roundtrip_lvl3(&data);
     }
 
     #[test]
-    fn data_decompress_lvl3_fail() {
+    fn lvl3_case1() {
+        let mut data = Vec::new();
+        let data_s = [77, 26, 106];
+        data.extend_from_slice(&data_s);
+        data.extend_from_slice(&data_s);
+        for i in 0..125 {
+            data.push(i);
+        }
+        data.extend_from_slice(&data_s);
+
+        roundtrip_lvl3(&data);
+    }
+
+    #[test]
+    fn lvl3_case2() {
+        let mut data = Vec::new();
+        let data_s = [77, 26, 106];
+        data.extend_from_slice(&data_s);
+        for i in 0..126 {
+            data.push(i);
+        }
+        data.extend_from_slice(&data_s);
+
+        roundtrip_lvl3(&data);
+    }
+
+    #[test]
+    fn lvl3_case2_2() {
+        let mut data = Vec::new();
+        let data_s = [77, 26, 106];
+        data.extend_from_slice(&data_s);
+        for i in 0u32..(1 << 13) {
+            data.push(i as u8);
+        }
+        data.extend_from_slice(&data_s);
+
+        roundtrip_lvl3(&data);
+    }
+
+    #[test]
+    fn lvl3_case3() {
+        let mut data = Vec::new();
+        let data_s = [77, 26, 106];
+        data.extend_from_slice(&data_s);
+        for i in 0u32..(1 << 14) {
+            data.push(i as u8);
+        }
+        data.extend_from_slice(&data_s);
+
+        roundtrip_lvl3(&data);
+    }
+
+    #[test]
+    fn lvl3_case3_2() {
+        let mut data = Vec::new();
+        let data_s = [77, 26, 106, 136, 1, 0, 128];
+        data.extend_from_slice(&data_s);
+        for i in 0u32..(1 << 9) {
+            data.push(i as u8);
+        }
+        data.extend_from_slice(&data_s);
+
+        roundtrip_lvl3(&data);
+    }
+
+    #[test]
+    fn lvl3_case3_3() {
+        let mut data = Vec::new();
+        let data_s = [77, 26, 106, 136, 1, 0, 128];
+        data.extend_from_slice(&data_s);
+        data.extend_from_slice(&data_s);
+        for i in 0..125 {
+            data.push(i);
+        }
+        data.extend_from_slice(&data_s);
+
+        roundtrip_lvl3(&data);
+    }
+
+    #[test]
+    fn lvl3_case4() {
         let mut data = Vec::new();
         for i in 0..(1 << 6) {
             data.push(255 - i);
@@ -1145,11 +1220,21 @@ mod tests {
             data.push(255 - i);
         }
 
-        let com = compress(&data, CompressionLevel::Lvl3);
-        let dec =
-            decompress(&mut Cursor::new(com.as_slice()), data.len() as u32)
-                .unwrap();
-        assert_eq!(&data, &dec);
+        roundtrip_lvl3(&data);
+    }
+
+    #[test]
+    fn lvl3_case5() {
+        let data_s = [
+            77, 26, 106, 136, 1, 0, 128, 97, 97, 97, 131, 154, 1, 0, 98, 98,
+        ];
+        let mut data = Vec::new();
+        data.extend_from_slice(&data_s);
+        for _ in 0..(1 << 11) {
+            data.push(0);
+        }
+        data.extend_from_slice(&data_s);
+        roundtrip_lvl3(&data);
     }
 
     #[test]
