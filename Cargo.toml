@@ -1,6 +1,6 @@
 [package]
 name = "quicklz"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Flakebi <flakebi@t-online.de>"]
 description = """
 QuickLZ is a fast compression algorithm.
@@ -13,7 +13,6 @@ categories = ["compression"]
 license = "MIT/Apache-2.0"
 include = [
     "src/*",
-    "Format.md",
     "README.md",
     "Cargo.toml"
 ]

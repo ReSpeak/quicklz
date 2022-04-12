@@ -1,0 +1,5 @@
+max_width = 80
+format_strings = true
+imports_indent = "Block"
+reorder_imports = true
+use_try_shorthand = true
